@@ -1,0 +1,35 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(make:*)",
+      "Bash(pytest:*)",
+      "Bash(.venv/bin/pytest:*)",
+      "Bash(ruff:*)",
+      "Bash(.venv/bin/ruff:*)",
+      "Bash(mypy:*)",
+      "Bash(.venv/bin/mypy:*)",
+      "Bash(python:*)",
+      "Bash(python3:*)",
+      "Bash(.venv/bin/python:*)",
+      "Bash(.venv/bin/erasure:*)",
+      "Bash(pip:*)",
+      "Bash(.venv/bin/pip:*)",
+      "Bash(bash scripts/upgrade_canary.sh)",
+      "Bash(git status)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(ls:*)",
+      "Bash(cat:*)",
+      "Bash(grep:*)",
+      "Bash(find:*)"
+    ],
+    "deny": [
+      "Read(./.env)",
+      "Bash(git push:*)",
+      "Bash(make deploy)",
+      "Bash(cdk deploy:*)"
+    ]
+  }
+}
