@@ -1,7 +1,21 @@
 .DEFAULT_GOAL := help
 SHELL := /bin/bash
-PY := .venv/bin/python
-PIP := .venv/bin/pip
+
+# venv layout differs by platform: Windows puts executables in .venv/Scripts,
+# POSIX in .venv/bin. Auto-detect so the same Makefile works on Windows,
+# WSL, Linux and CI. Falls back to bin/ before the venv exists.
+VENV_BIN := $(if $(wildcard .venv/Scripts),.venv/Scripts,.venv/bin)
+PY := $(VENV_BIN)/python
+PIP := $(VENV_BIN)/pip
+RUFF := $(VENV_BIN)/ruff
+MYPY := $(VENV_BIN)/mypy
+PYTEST := $(VENV_BIN)/pytest
+
+# src and tests exist from commit zero; evals and seeds land at M4/M7. Lint only
+# the dirs that exist so `make check` is green at commit zero, and pick them up
+# automatically the moment they appear — same "becomes mandatory when it lands"
+# rule the milestone gates use (docs/ROADMAP.md, rule 4). Not a silencing guard.
+LINT_DIRS := src tests $(wildcard evals seeds)
 
 # Milestone-gated targets: stages that haven't been built yet print "⏳ lands
 # at Mx" instead of failing, so `make check` and CI are green from commit zero.
@@ -63,35 +77,35 @@ ledger: ## Print the hash-chained audit ledger and verify the chain (M5)
 # ─── Quality ──────────────────────────────────────────────────────────────────
 .PHONY: lint
 lint: ## ruff + mypy
-	.venv/bin/ruff check src tests evals seeds
-	.venv/bin/ruff format --check src tests
-	.venv/bin/mypy src
+	$(RUFF) check $(LINT_DIRS)
+	$(RUFF) format --check src tests
+	$(MYPY) src
 
 .PHONY: fmt
 fmt: ## Autoformat
-	.venv/bin/ruff format src tests evals seeds
-	.venv/bin/ruff check --fix src tests evals seeds
+	$(RUFF) format $(LINT_DIRS)
+	$(RUFF) check --fix $(LINT_DIRS)
 
 .PHONY: test
 test: ## Unit tests
-	.venv/bin/pytest tests/unit
+	$(PYTEST) tests/unit
 
 .PHONY: conformance
 conformance: ## Every participant must pass the 5-verb contract suite (M2)
 	@if ls tests/conformance/test_*.py >/dev/null 2>&1; then \
-		.venv/bin/pytest tests/conformance -m conformance; \
+		$(PYTEST) tests/conformance -m conformance; \
 	else echo "⏳ lands at M2 — docs/ROADMAP.md"; fi
 
 .PHONY: integration
 integration: ## Full saga, all phases, against the fake subsystems (M5)
 	@if ls tests/integration/test_*.py >/dev/null 2>&1; then \
-		.venv/bin/pytest tests/integration -m integration; \
+		$(PYTEST) tests/integration -m integration; \
 	else echo "⏳ lands at M5 — docs/ROADMAP.md"; fi
 
 .PHONY: policy-test
 policy-test: ## Cedar policy unit tests (M6)
 	@if [ -f tests/unit/test_policies.py ]; then \
-		.venv/bin/pytest tests/unit/test_policies.py; \
+		$(PYTEST) tests/unit/test_policies.py; \
 	else echo "⏳ lands at M6 — docs/ROADMAP.md"; fi
 
 # ─── Evaluation ───────────────────────────────────────────────────────────────
