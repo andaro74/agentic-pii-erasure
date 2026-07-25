@@ -1,0 +1,59 @@
+name: CI
+
+# What CI runs on every PR: quality · conformance · saga · recall gate · upgrade canary.
+# Green from commit zero — milestone-gated make targets print "⏳ lands at Mx" and
+# exit 0 until their stage's entry file exists, then become mandatory automatically
+# (Makefile + docs/ROADMAP.md rule 4). Do not add steps that assume a later milestone.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    env:
+      PII_ERASURE_OFFLINE: "1"          # hermetic: stub model + SQLite, no AWS, no cost
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"        # exact-pinned deps predate 3.13/3.14 — see ADR-014
+
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-${{ runner.os }}-${{ hashFiles('pyproject.toml') }}
+          restore-keys: pip-${{ runner.os }}-
+
+      - name: Install (venv + dev extras)
+        run: make install
+
+      # ─── Quality gate: lint + unit + conformance + policy (Makefile `check`) ───
+      - name: make check
+        run: make check
+
+      # ─── Milestone-gated gates. No-op until their stage lands, then enforce. ───
+      - name: Full saga (integration)
+        run: make integration
+
+      - name: Discovery recall gate (== 1.0)
+        run: make eval
+
+      - name: Adversarial corpus (policy-denied, not model-resisted)
+        run: make eval-adversarial
+
+      - name: Upgrade canary (required before any langgraph bump — ADR-014)
+        run: make upgrade-canary

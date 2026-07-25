@@ -1,0 +1,96 @@
+%% ASDP · The three-phase saga.
+%% Phases differ by recovery model, separated by the approval gate.
+%% Source of truth: ARCHITECTURE.md §5. See ADR-002.
+stateDiagram-v2
+    direction TB
+    [*] --> Intake
+
+    Intake: 📥 Intake and Identity Resolution
+    note right of Intake
+        Resolve subject to a stable
+        pseudonymous handle.
+        Raw PII never enters the
+        reasoning plane.
+    end note
+
+    state "PHASE 1 — DISCOVER (read-only)" as P1 {
+        Discovery: 🔍 Discovery subgraph, parallel
+        HoldCheck: ⚖️ Legal hold evaluation
+        Planning: 📋 Manifest synthesis + KMS signature
+        Discovery --> HoldCheck
+        HoldCheck --> Planning
+    }
+
+    state "PHASE 2 — SOFT DELETE (compensatable)" as P2 {
+        Revoke: 🔒 Revoke identity FIRST
+        SoftAll: 🗃️ soft_delete all participants
+        VerifySoft: ✅ Verify soft state
+        Revoke --> SoftAll
+        SoftAll --> VerifySoft
+    }
+
+    state "PHASE 3 — HARD DELETE (forward-only)" as P3 {
+        Derived: 🔁 Purge derived stores
+        Auth: 🎯 Purge authoritative stores
+        Shred: 🔥 Crypto-shred WORM
+        Derived --> Auth
+        Auth --> Shred
+    }
+
+    Intake --> P1
+    P1 --> Blocked: hold blocks all
+    P1 --> P2: plan approved for soft phase
+    P2 --> Compensate: any participant fails
+    Compensate --> Failed: restore complete
+    P2 --> AwaitApproval
+
+    AwaitApproval: ⏸️ HUMAN APPROVAL GATE
+    note left of AwaitApproval
+        interrupt() — state checkpointed,
+        process exits. Days to weeks.
+        EventBridge Scheduler holds the
+        timeout. Silence implies DENY.
+    end note
+
+    AwaitApproval --> Grace: approved
+    AwaitApproval --> Compensate: denied or timeout
+
+    Grace: ⏳ Statutory grace window
+    Grace --> Compensate: subject revokes request
+    Grace --> Recheck: window elapsed
+
+    Recheck: ⚖️ Re-evaluate legal holds
+    note right of Recheck
+        Holds MUST be re-checked here.
+        A hold placed during the grace
+        window is a compliance defect
+        if the phase 1 result is cached.
+    end note
+    Recheck --> Blocked: new hold found
+    Recheck --> P3: still clear
+
+    P3 --> Verify: all applied
+    P3 --> Stuck: participant unrecoverable
+
+    Stuck: 🚨 DLQ + operator runbook
+    note right of Stuck
+        NO compensation exists here.
+        Forward recovery only:
+        retry until success.
+    end note
+    Stuck --> P3: manual remediation
+
+    Verify: 🔬 Verification sweep T+0
+    Verify --> Sweeps: zero residual
+    Verify --> Stuck: residual found
+
+    Sweeps: 🔁 Re-verify T+7, T+30
+    Sweeps --> Resurrection: artifacts reappeared
+    Resurrection: ⚠️ Resurrection incident
+    Resurrection --> P3
+
+    Sweeps --> Certified
+    Certified: 📜 Certificate of Erasure issued
+    Certified --> [*]
+    Blocked --> [*]
+    Failed --> [*]

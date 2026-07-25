@@ -1,0 +1,40 @@
+%% ASDP · Recovery semantics — the backward→forward switch at the approval gate.
+%% The single structural decision everything else follows from. ADR-002.
+%% Referenced from README ("The part most saga write-ups get wrong").
+flowchart TB
+    subgraph BACK["◀ BACKWARD RECOVERY — compensatable"]
+        direction TB
+        P1["Phase 1 · Discover<br/><i>read-only inventory + hold check</i><br/>trivially reversible"]
+        P2["Phase 2 · Soft delete<br/><i>disable · tombstone · mark pending</i><br/>every step has a restore inverse"]
+        P1 --> P2
+    end
+
+    GATE{{"⏸️ HUMAN APPROVAL GATE + GRACE WINDOW<br/>interrupt() · process exits · silence implies DENY<br/><b>the point of no return</b>"}}
+
+    subgraph FWD["FORWARD RECOVERY ONLY — no inverse exists ▶"]
+        direction TB
+        P3["Phase 3 · Hard delete<br/><i>purge · crypto-shred (DEK destroyed)</i><br/>retry to success — never unwind"]
+        DLQ["🚨 DLQ + operator runbook<br/><i>on failure: halt, do NOT compensate</i>"]
+        P3 -->|"participant unrecoverable"| DLQ
+        DLQ -->|"forward remediation"| P3
+    end
+
+    P2 -->|"denied · timeout · subject withdraws"| COMP["↩️ Compensate<br/><i>restore everywhere · fail safe</i>"]
+    P2 --> GATE
+    GATE -->|"approved · grace elapsed · holds re-checked == 0"| P3
+    GATE -->|"denied / timeout"| COMP
+    P3 -->|"verify == 0, then T+7 / T+30 sweeps"| CERT["📜 Certificate of Erasure"]
+
+    NOTE["⚠️ Why the line matters:<br/>a 'compensation' after hard_delete would<br/>RECREATE the subject's data —<br/>turning a failed erasure into an active breach.<br/>So restore is unreachable from Phase 3 (invariant #6)."]
+    NOTE -.-> FWD
+
+    classDef back fill:#ecfdf5,stroke:#059669,color:#000
+    classDef fwd fill:#fee2e2,stroke:#dc2626,color:#000
+    classDef gate fill:#fff4e6,stroke:#d97706,color:#000,font-weight:bold
+    classDef terminal fill:#e6f0ff,stroke:#1d4ed8,color:#000
+    classDef warn fill:#fef9c3,stroke:#ca8a04,color:#000
+    class P1,P2,COMP back
+    class P3,DLQ fwd
+    class GATE gate
+    class CERT terminal
+    class NOTE warn

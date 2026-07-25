@@ -1,0 +1,36 @@
+%% ASDP · Human approval with digest-bound tokens (closes the TOCTOU hole).
+%% LangGraph interrupt/resume — the process exits while paused. ADR-014.
+%% Source of truth: ARCHITECTURE.md §8.2. See ADR-006.
+sequenceDiagram
+    autonumber
+    participant SFN as LangGraph saga
+    participant GW as Gateway + Cedar
+    participant APV as Approver
+    participant EX as Executor Role
+    participant P as Participants
+
+    Note over SFN: Phase 2 complete, manifest signed
+    SFN->>SFN: digest = sha256(canonical(manifest))
+    SFN->>APV: interrupt() — approval request + digest
+    Note over SFN,APV: state checkpointed, process EXITS<br/>EventBridge Scheduler holds the timeout<br/>silence implies DENY
+
+    APV->>APV: review blast radius, holds, residual risk
+    APV->>SFN: Command(resume={decision, digest})
+    SFN->>SFN: assert returned digest == signed digest
+    Note over SFN: mismatch implies abort — re-approval required
+
+    SFN->>SFN: mint approval token bound to digest
+    Note over SFN: ⏳ grace window, then re-check legal holds
+
+    SFN->>EX: resume from checkpoint, assume executor role
+    EX->>GW: subject.hard_delete(manifestDigest, approvalToken)
+    GW->>GW: Cedar: principal==executor AND<br/>token.digest==manifestDigest AND<br/>graceElapsed AND holds==0 AND subjectCount==1
+    alt policy allows
+        GW->>P: invoke
+        P-->>GW: APPLIED + receipt digest
+        GW-->>EX: receipt
+        EX->>SFN: record in audit ledger
+    else policy denies
+        GW-->>EX: DENY (logged to CloudWatch)
+        Note over EX: saga halts — no retry loop on authz failure
+    end
