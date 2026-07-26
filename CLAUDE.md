@@ -32,7 +32,7 @@ Session loop:
 
 `make check` is green from commit zero **and needs no AWS account**: lint, unit tests, policy tests, and `cdk synth` with its IAM assertions. Milestone-gated targets print "⏳ lands at Mx" until their entry file exists, then become mandatory automatically. **Never re-add a guard to silence a failing gate.**
 
-**Anything that spends money or mutates real infrastructure is human-only** and denied in `.claude/settings.json`: `make bootstrap`, `make deploy`, `make deploy-dev`, `make destroy-dev`, and any raw `cdk bootstrap`/`deploy`/`destroy`. `make synth` is fine. Custom commands: `/next-milestone`, `/add-participant`, `/validate`.
+**Anything that spends money or mutates real infrastructure is human-only** and denied in `.claude/settings.json`: `make bootstrap`, `make deploy`, `make deploy-dev`, `make destroy-dev`, and any raw `cdk bootstrap`/`deploy`/`destroy`. `make synth` and `make preflight` are fine — preflight is read-only and free, and asks AWS the questions the hermetic gate cannot (V8-5). Custom commands: `/next-milestone`, `/add-participant`, `/validate`.
 
 ---
 
@@ -172,6 +172,7 @@ Docs live in `docs/`, CDK in `infra/`, Cedar policies in `policies/cedar/`, fabr
 make install        # venv + dev extras
 make check          # lint + unit + policy + synth  — hermetic, no AWS account, run before every commit
 make synth          # CDK synth with IAM assertions
+make preflight      # region-specific checks synth cannot make (engine versions). Read-only, free
 
 # these cost money and are human-only (denied in .claude/settings.json)
 make bootstrap      # once per account + region — creates the CDK toolkit stack
