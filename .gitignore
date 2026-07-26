@@ -24,7 +24,10 @@ share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
-MANIFEST
+# Anchored to the repo root and to a FILE. Unanchored, this pattern matched the
+# src/pii_erasure/manifest/ PACKAGE on case-insensitive filesystems and silently
+# excluded it from a commit — see VALIDATION V6-1.
+/MANIFEST
 
 # PyInstaller
 #   Usually these files are written by a python script from a template

@@ -1,0 +1,92 @@
+{
+  "comment": "Golden manifest fixture. If test_golden_manifest_digest goes red, the manifest layer changed in a way that invalidates outstanding approvals: bump MANIFEST_SCHEMA_VERSION and add a NEW fixture. Never edit this one.",
+  "manifest": {
+    "schemaVersion": "1.0.0",
+    "manifestId": "man_01JQ8TEST",
+    "sagaId": "saga_01JQ8TEST",
+    "subjectRef": "sub_a3f9",
+    "requestId": "dsr_2026_0412",
+    "provenance": {
+      "discoveredAt": "2026-07-23T10:14:02Z",
+      "agentVersion": "asdp-discovery@2.3.1",
+      "modelId": "anthropic.claude-sonnet-5",
+      "runtimeSessionId": "rs-0001",
+      "traceId": "1-abc-def"
+    },
+    "participants": [
+      {
+        "systemId": "upload-bucket",
+        "archetype": "DELETABLE_BLOB",
+        "artifacts": [
+          {
+            "kind": "object",
+            "locator": "sub_a3f9/",
+            "count": 3,
+            "classification": [],
+            "retentionUntil": null
+          }
+        ],
+        "holds": [],
+        "plannedOps": [
+          "soft_delete",
+          "hard_delete"
+        ],
+        "order": {
+          "phase": 3,
+          "rank": 10
+        },
+        "deleteMethod": null,
+        "dekRegistryRef": null,
+        "kmsKeyArn": null
+      },
+      {
+        "systemId": "compliance-archive",
+        "archetype": "WORM",
+        "artifacts": [
+          {
+            "kind": "locked-object",
+            "locator": "sub_a3f9/",
+            "count": 12,
+            "classification": [],
+            "retentionUntil": null
+          },
+          {
+            "kind": "wrapped-dek",
+            "locator": "dek#sub_a3f9",
+            "count": 1,
+            "classification": [],
+            "retentionUntil": null
+          }
+        ],
+        "holds": [],
+        "plannedOps": [
+          "soft_delete",
+          "hard_delete"
+        ],
+        "order": {
+          "phase": 3,
+          "rank": 99
+        },
+        "deleteMethod": "CRYPTO_SHRED",
+        "dekRegistryRef": "kr#sub_a3f9",
+        "kmsKeyArn": null
+      }
+    ],
+    "legalHolds": [],
+    "residualRisk": [
+      {
+        "kind": "hash",
+        "locator": "ses:suppression",
+        "count": 1,
+        "classification": [],
+        "retentionUntil": null,
+        "reason": "legally retained"
+      }
+    ],
+    "graceWindowDays": 30,
+    "digest": null,
+    "signature": null
+  },
+  "digest": "sha256:ec83f36502845f6f89f7f4ec5904236c600aac911a503caff69845f34bc2b8df",
+  "bodySha256SortedJson": "f4fdab4dbb46225d49a6271c375de0204c2cb466e401f4cb080fb4a516e70ab2"
+}

@@ -267,6 +267,31 @@ manifest needs only the two participants M2 built.
 > deferral of M4 is therefore void and the book order resumes: M4 is next. Kept on the
 > record rather than edited away, because a log that rewrites its reasoning is not a log.
 
+### 2026-07-26 · V6-1 — an entire package silently excluded from the repository
+
+Caught by CI, not by anything local, and it arrived wearing a disguise.
+
+| ID | Severity | Finding | Resolution |
+|---|---|---|---|
+| V6-1 | **High** | **`.gitignore` excluded `src/pii_erasure/manifest/` — M3's entire deliverable.** The stock Python template's `MANIFEST` pattern (meant for setuptools' generated file at the repo root) is unanchored, so on a case-insensitive filesystem git matched it against the *directory* `manifest/`. Five modules and the golden fixture directory `tests/fixtures/manifest/` were excluded from the commit. `git add -A` said nothing; `git status` was clean; `make check` passed locally because the files exist on disk. A clone would not have contained the manifest layer at all. | **Fixed.** The pattern is now `/MANIFEST` — anchored to the root and to a file, which is what setuptools actually generates. The package and the fixture are committed. Backed by `tests/unit/test_nothing_source_is_ignored.py`, which fails if any authored file under `src/`, `tests/`, `infra/stacks/`, `evals/`, `seeds/` or `policies/` is gitignored, and separately if any `__init__.py` on disk is untracked. |
+
+**The disguise is the lesson.** `make check` runs lint before tests, so the missing
+package surfaced in CI as **`I001 Import block is un-sorted`** — because ruff resolves
+first-party imports against the filesystem, and with `manifest/` absent it reclassified
+`pii_erasure.manifest` as third-party and demanded a different import order. The true
+cause (a package that does not exist in the repository) was three inferential steps from
+the reported symptom. A defect that misreports itself costs more than one that fails
+loudly, and no amount of reading the diff would have found it: the diff looked complete.
+
+The new guard needed no synthetic mutation to prove it can fail — it was written while
+the bug was still present, and went red on the real defect before the fix landed.
+
+**Second-order note.** This is the first defect in the log that local `make check` could
+not have caught by construction: the gate runs against the working tree, and the working
+tree was correct. The class is "the repository differs from the machine", and the only
+mechanism that sees it is one that asks git rather than the filesystem. Worth remembering
+when adding future guards.
+
 1. Read a doc claim as an adversary: *what would make this false, and could the
    named control detect it?*
 2. If the control can't go red, that's a finding — record it here with the fix and
