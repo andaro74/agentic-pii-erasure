@@ -157,6 +157,17 @@ class _FakeAthena:
     def get_query_execution(self, **_: Any) -> dict[str, Any]:
         return {"QueryExecution": {"Status": {"State": "SUCCEEDED"}}}
 
+    def get_query_results(self, **_: Any) -> dict[str, Any]:
+        """`_write_analytics` counts the rows back rather than trusting the INSERT."""
+        return {
+            "ResultSet": {
+                "Rows": [
+                    {"Data": [{"VarCharValue": "_col0"}]},
+                    {"Data": [{"VarCharValue": str(len(self.rows))}]},
+                ]
+            }
+        }
+
 
 class _FakeSes:
     def __init__(self) -> None:
@@ -182,6 +193,11 @@ class _FakeTable:
         item = kw["Item"]
         self.items[(item["subject_ref"], item.get("item_id", "-"))] = item
         return {}
+
+    def query(self, **kw: Any) -> dict[str, Any]:
+        """The writers read back what they wrote (V8-12), so the fake must answer."""
+        wanted = kw["ExpressionAttributeValues"][":s"]
+        return {"Items": [v for (ref, _), v in self.items.items() if ref == wanted]}
 
 
 class _FakeDynamo:
@@ -359,3 +375,72 @@ def test_a_non_sandbox_bad_request_still_fails(
 
     with pytest.raises(ClientError):
         generator.run(SEEDS)
+
+
+# ─── the map measures, it does not echo (V8-12) ───────────────────────────────────────
+
+
+def test_the_map_counts_versions_rather_than_the_declared_object_count(
+    rig: tuple[FixtureGenerator, dict[str, Any]],
+) -> None:
+    """The declaration and the reality differ, and `discover` sees the reality.
+
+    Seeding `objects=3, deleteMarkers=1` writes four object versions: three uploads plus
+    the tombstoned one whose delete marker demonstrates that a marker is not a deletion.
+    `upload-bucket.discover` counts versions, so a map echoing `objects=3` disagrees with
+    discovery by one — and the recall gate charges the difference to the agent.
+    """
+    generator, clients = rig
+
+    truth = generator.run(SEEDS)
+
+    recorded = truth.to_json()["subjects"]["sub_mar_7f3a91c4"]["upload-bucket"]
+    actual_versions = len(clients["s3"].versions["uploads"])
+    actual_markers = len(clients["s3"].markers["uploads"])
+
+    assert recorded["objects"] == actual_versions == 4
+    assert recorded["deleteMarkers"] == actual_markers == 1
+
+
+def test_a_write_that_lands_short_is_refused_rather_than_recorded(
+    rig: tuple[FixtureGenerator, dict[str, Any]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The property that makes the map trustworthy.
+
+    A writer that silently landed fewer rows than asked must not yield a map claiming the
+    full count — that is ground truth grading against a fiction, baseline finding #4 in a
+    new place. The generator goes further than recording the short number: the consistency
+    wait never sees the expected state, so it refuses to produce a map at all. Refusing is
+    the better answer, because a short seed is a defect to fix rather than a fact to record.
+    """
+    import evals.fixtures.generator as gen
+
+    monkeypatch.setattr(gen, "CONSISTENCY_TIMEOUT_SECONDS", 0.2)
+    monkeypatch.setattr(gen, "_POLL_SECONDS", 0.05)
+
+    generator, clients = rig
+    table = clients["dynamodb"].Table("profiles")
+    original, calls = table.put_item, {"n": 0}
+
+    def _lossy(**kw: Any) -> dict[str, Any]:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return {}  # silently dropped on the floor
+        return original(**kw)
+
+    table.put_item = _lossy  # type: ignore[method-assign]
+    seeds = {
+        "tenant": SEEDS["tenant"],
+        "subjects": [
+            {
+                "subjectRef": "sub_mar_7f3a91c4",
+                "displayName": "Marisol Okonkwo",
+                "email": "marisol.okonkwo@meridian.invalid",
+                "placement": {"profile-store": {"items": 3}},
+            }
+        ],
+    }
+
+    with pytest.raises(gen.ConsistencyTimeoutError, match="refusing to record"):
+        generator.run(seeds)

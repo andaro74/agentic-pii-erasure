@@ -666,6 +666,37 @@ after a slow, expensive operation had begun. That is the category the preflight 
 exists for, and it is worth extending whenever a deployed gate fails for a reason
 `make check` could never have held an opinion about.
 
+### 2026-07-26 · V8-12 / V8-13 — validating the first real seed
+
+`make seed ALLOW_SES_SANDBOX=1` succeeded. Cross-checking the emitted map against the
+services found one defect in the map itself and one in the conformance suite.
+
+| ID | Severity | Finding | Resolution |
+|---|---|---|---|
+| V8-12 | **High** | **The ground-truth map echoed the declaration instead of measuring the write.** Every `_write_*` returned the numbers it was handed. For `upload-bucket` those differ from reality: seeding `objects=3, deleteMarkers=1` writes **four** object versions, because the tombstoned object — the one whose marker demonstrates that a marker is not a deletion — is itself a version, and `discover` counts versions. Confirmed by invoking the deployed participant: `discover` reports `object=4`, the map said `3`. The gap would have surfaced as a recall miss charged to the discovery agent. | **Fixed.** Every writer now reads back what the service holds — version counts, a `KeyCount`, `GetVectors` probes, a `SELECT count(*)`, a consistent `Query` — and the module docstring's claim that each writer "returns what it actually created" is now true rather than aspirational. |
+| V8-13 | **Medium** | **The conformance suite leaves its throwaway subjects behind**, contradicting its own docstring ("leaves nothing behind"). Four runs deposited 22 `sub_conf_*` subjects in the upload bucket, 24 in the compliance archive and 23 in the DEK registry. Only the tests that call `hard_delete` clean up; `discover`, `soft_delete`/`restore`, idempotency and evidence tests do not. In the **Object Lock** bucket the residue cannot be removed until retention expires. | **Open**, recorded here. The seeded objects are fabricated and harmless, but they inflate every by-prefix count in the account and make manual inspection noisy. Fix belongs with the conformance seeder work still outstanding for M4. |
+
+**V8-12 is the most consequential defect in this log**, because of what it would have
+looked like. `make eval` compares discovery's output against the map; the map was wrong by
+one; recall would have come out below 1.0; the gate would have gone red, and **the obvious
+suspect would have been the discovery agent** — the one component that was behaving
+correctly. Hours would have gone into prompt tuning to fix a counting bug in the fixture.
+That is baseline finding #4 inverted: not a fixture that cannot fail, but a fixture that
+fails the wrong component.
+
+It also shows how a docstring can insulate a defect. The module said, in its opening
+paragraph, that the map is assembled from what each writer "actually created" — and I read
+that sentence several times while writing V8-8's idempotency fixes without checking whether
+the returns were measurements or echoes. **A claim written by the same author, in the same
+file, is not evidence.** The check that found it was mechanical and took one command:
+invoke the participant, compare with the map.
+
+**Method note.** Everything else reconciled exactly — Cognito 5/5, profile items 3/3/4/2/2,
+S3 Vectors 12/9/6, the SES contact, the archive's two locked objects and its DEK. The
+discrepancy was visible only because the raw S3 version listing was compared against the
+map rather than the map against itself. Validating an artifact against the system it
+describes is worth more than validating it for internal consistency, which it always has.
+
 1. Read a doc claim as an adversary: *what would make this false, and could the
    named control detect it?*
 2. If the control can't go red, that's a finding — record it here with the fix and

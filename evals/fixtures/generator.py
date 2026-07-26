@@ -9,6 +9,13 @@ from those returns. Two failure modes are ruled out by construction:
 * **Hand-written ground truth drifts.** A map maintained beside the seeder is a second
   source of truth, and the copy that rots is always the one nobody runs. Here there is no
   second copy: a write that does not happen cannot appear in the map.
+* **Echoing the declaration is not measuring the write** (V8-12). Every `_write_*` ends by
+  *reading back* what the service now holds — counting versions, probing vector keys,
+  querying row counts — rather than returning the numbers it was handed. The two differ:
+  seeding `objects=3, deleteMarkers=1` puts **four** versions in a versioned bucket,
+  because the tombstoned object is itself a version, and `discover` counts versions. A map
+  built from the declaration disagreed with what discovery finds, and the resulting recall
+  miss would have been charged to the agent.
 * **Ground truth derived from the agent's output measures nothing.** If the map came from
   what discovery found, recall would be 1.0 by definition and ADR-008's gate would be
   decoration. The generator never reads a participant's `discover`.
@@ -262,7 +269,14 @@ class FixtureGenerator:
             ),
             what=f"profile items for {subject['subjectRef']}",
         )
-        return {"items": count}
+        written = len(
+            table.query(
+                KeyConditionExpression="subject_ref = :s",
+                ExpressionAttributeValues={":s": subject["subjectRef"]},
+                ConsistentRead=True,
+            ).get("Items", [])
+        )
+        return {"items": written}
 
     def _write_billing(self, subject: dict[str, Any], expected: dict[str, int]) -> dict[str, int]:
         # Applied on first use rather than at construction: a run with no billing subject
@@ -342,7 +356,12 @@ class FixtureGenerator:
             key = f"{subject['subjectRef']}/tombstoned-{index:03d}.bin"
             s3.put_object(Bucket=bucket, Key=key, Body=b"fabricated upload")
             s3.delete_object(Bucket=bucket, Key=key)
-        return {"objects": objects, "deleteMarkers": markers}
+        # Measured, not echoed (V8-12). The tombstoned object is itself a version, so
+        # writing `objects=3, deleteMarkers=1` puts FOUR versions in the bucket — and
+        # `discover` counts versions. Returning the declaration here made the map disagree
+        # with what discovery finds, which is a recall miss the agent gets blamed for.
+        versions, markers_found = _count_versions(s3, bucket, f"{subject['subjectRef']}/")
+        return {"objects": versions, "deleteMarkers": markers_found}
 
     def _write_archive(self, subject: dict[str, Any], expected: dict[str, int]) -> dict[str, int]:
         s3 = self._clients["s3"]
@@ -370,7 +389,10 @@ class FixtureGenerator:
                     "wrapped_dek": b"fabricated-wrapped-dek",
                 }
             )
-        return {"lockedObjects": objects, "wrappedDeks": expected.get("wrappedDeks", 0)}
+        held = s3.list_objects_v2(Bucket=bucket, Prefix=f"{subject['subjectRef']}/").get(
+            "KeyCount", 0
+        )
+        return {"lockedObjects": held, "wrappedDeks": expected.get("wrappedDeks", 0)}
 
     def _write_vectors(self, subject: dict[str, Any], expected: dict[str, int]) -> dict[str, int]:
         vectors = self._clients["s3vectors"]
@@ -405,7 +427,18 @@ class FixtureGenerator:
                 ),
                 what=f"vectors for {subject['subjectRef']}",
             )
-        return {"vectors": count}
+        present = 0
+        if count:
+            probe = [vector_key(subject["subjectRef"], n) for n in range(count)]
+            for start in range(0, len(probe), 100):  # GetVectors caps at 100 (V8-2)
+                present += len(
+                    vectors.get_vectors(
+                        vectorBucketName=self._config["vectorBucket"],
+                        indexName=self._config["vectorIndex"],
+                        keys=probe[start : start + 100],
+                    ).get("vectors", [])
+                )
+        return {"vectors": present}
 
     def _write_analytics(self, subject: dict[str, Any], expected: dict[str, int]) -> dict[str, int]:
         rows = expected.get("rows", 0)
@@ -436,7 +469,14 @@ class FixtureGenerator:
                 f"INSERT INTO {self._config['analyticsTable']} (subject_ref, event) "  # noqa: S608
                 f"VALUES {values}"
             )
-        return {"rows": rows}
+        if not rows:
+            return {"rows": 0}
+        handle = _safe_handle(subject["subjectRef"])
+        execution = self._athena(
+            f"SELECT count(*) FROM {self._config['analyticsTable']} "  # noqa: S608
+            f"WHERE subject_ref = '{handle}'"
+        )
+        return {"rows": self._scalar(execution)}
 
     def _write_suppression(
         self, subject: dict[str, Any], expected: dict[str, int]
@@ -503,6 +543,15 @@ class FixtureGenerator:
             ],
         )
 
+    def _scalar(self, execution_id: str) -> int:
+        """First cell of a single-value result. Row 0 is the header."""
+        rows = self._clients["athena"].get_query_results(QueryExecutionId=execution_id)[
+            "ResultSet"
+        ]["Rows"]
+        if len(rows) < 2:
+            return 0
+        return int(rows[1]["Data"][0].get("VarCharValue") or 0)
+
     def _athena(self, statement: str) -> str:
         """Run one statement and wait for a **terminal** state, not for success.
 
@@ -550,6 +599,15 @@ def _safe_handle(subject_ref: str) -> str:
             "interpolate it into a statement"
         )
     return subject_ref
+
+
+def _count_versions(s3: Any, bucket: str, prefix: str) -> tuple[int, int]:
+    """How many object versions and delete markers actually exist under `prefix`."""
+    versions = markers = 0
+    for page in s3.get_paginator("list_object_versions").paginate(Bucket=bucket, Prefix=prefix):
+        versions += len(page.get("Versions", []))
+        markers += len(page.get("DeleteMarkers", []))
+    return versions, markers
 
 
 def _is_ses_sandbox(error: ClientError) -> bool:
