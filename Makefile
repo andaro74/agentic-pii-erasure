@@ -164,8 +164,40 @@ bootstrap: ## ⚠️ ONE-TIME per account+region: create the CDK toolkit stack. 
 	echo "bootstrapping aws://$$acct/$$AWS_REGION"; \
 	$(CDK) bootstrap "aws://$$acct/$$AWS_REGION"
 
+.PHONY: preflight
+preflight: ## Check region-specific facts cdk synth cannot know. Read-only, free.
+	@# `cdk synth` validates shape, never availability. The CDK engine-version enum lists
+	@# versions that exist *somewhere*, at the time the library was published — not what
+	@# this region offers today. VER_16_6 synthesised clean and CloudFormation rejected it
+	@# ten minutes into a deploy, because 16.6 ships only as 16.6-limitless (V8-5).
+	@# One API call answers that before the rollback rather than after.
+	@#
+	@# The version is read from the attribute access, not a bare VER_ token: the comment
+	@# above the engine declaration names the version that FAILED, and a looser pattern
+	@# reads that instead — which had this check reporting the old version as unavailable.
+	@# Correct answer, wrong question.
+	@$(LOAD_ENV); \
+	$(REQUIRE_REGION); \
+	want=$$(grep -oE 'AuroraPostgresEngineVersion\.VER_[0-9]+_[0-9]+' infra/stacks/participants.py \
+		| head -1 | sed 's/.*VER_//; s/_/./'); \
+	if [ -z "$$want" ]; then echo "❌ could not read the engine version from the stack"; exit 1; fi; \
+	echo "preflight: aurora-postgresql $$want in $$AWS_REGION"; \
+	found=$$(aws rds describe-db-engine-versions --engine aurora-postgresql \
+		--engine-version "$$want" --query 'DBEngineVersions[0].EngineVersion' \
+		--output text 2>/dev/null); \
+	if [ "$$found" != "$$want" ]; then \
+		echo "❌ aurora-postgresql $$want is NOT available in $$AWS_REGION."; \
+		echo "   available 16.x (standard, non-limitless):"; \
+		aws rds describe-db-engine-versions --engine aurora-postgresql \
+			--query 'DBEngineVersions[?starts_with(EngineVersion,`16.`)].EngineVersion' \
+			--output text 2>/dev/null | tr '\t' '\n' | grep -v limitless | sed 's/^/     /'; \
+		echo "   update AuroraPostgresEngineVersion in infra/stacks/participants.py"; \
+		exit 1; \
+	fi; \
+	echo "✅ preflight passed"
+
 .PHONY: deploy-dev
-deploy-dev: package ## ⚠️ Deploy a dev-shaped stack (STAGE=dev by default). Costs money.
+deploy-dev: package preflight ## ⚠️ Deploy a dev-shaped stack (STAGE=dev by default). Costs money.
 	@$(LOAD_ENV); \
 	$(REQUIRE_REGION); \
 	$(RESOLVE_STAGE); \

@@ -420,6 +420,33 @@ reachable only by a human running `make seed` against a deployed stack, i.e. the
 and most expensive feedback loop available. It is now asserted hermetically: every output
 key the CLI reads is checked against the synthesised templates.
 
+### 2026-07-26 · V8-5 — a pinned engine version that does not exist in the region
+
+Found by `make deploy-dev` failing, ten minutes in.
+
+| ID | Severity | Finding | Resolution |
+|---|---|---|---|
+| V8-5 | **Medium** | **`AuroraPostgresEngineVersion.VER_16_6` synthesised cleanly and CloudFormation rejected it**: `Cannot find version 16.6 for aurora-postgresql`. In `us-west-2`, 16.6 exists only as `16.6-limitless` — a different engine mode, not the standard version. The CDK enum is a compile-time list of versions that have existed *somewhere* when the library was published; it is not a statement about what a given region offers today. `cdk synth` therefore validated the shape of a cluster that cannot be created. | **Fixed** to `VER_16_13`, confirmed in-region and confirmed to report `ServerlessV2FeaturesSupport.MinCapacity = 0`, which `serverless_v2_min_capacity=0` depends on. New `make preflight` target asks RDS before deploying; `deploy-dev` now depends on it. Verified in both directions — it fails on `VER_16_6` and passes on `VER_16_13`. |
+
+**This is a genuine limit of the hermetic gate, not an oversight in it.** `make check`
+runs without an AWS account by design, so it cannot know which engine versions a region
+offers, which instance classes are available in an AZ, or which service quotas apply. Those
+facts are only knowable by asking AWS. The useful response is not to weaken the hermetic
+gate's independence but to add a *third*, cheap category between the two: a read-only,
+free, credentialed check that runs before anything is created.
+
+`make preflight` is that category's first member. It costs one API call and seconds; the
+failure it replaces cost a full create-and-rollback cycle. Candidates to add as they bite:
+instance-class availability per AZ, service quotas, and whether S3 Vectors is offered in
+the target region at all.
+
+**A smaller lesson inside the fix.** The first version of the check extracted the engine
+version with `grep -oE 'VER_16_[0-9]+'`, which matched the *comment above the declaration*
+— a comment naming the version that had just failed. It duly reported `16.6` unavailable:
+a correct answer to the wrong question, and a check that would have kept failing after the
+bug was fixed. The pattern is now anchored to the attribute access. Guards need testing in
+both directions for the same reason the things they guard do.
+
 1. Read a doc claim as an adversary: *what would make this false, and could the
    named control detect it?*
 2. If the control can't go red, that's a finding — record it here with the fix and

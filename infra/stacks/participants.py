@@ -317,8 +317,17 @@ class ParticipantsStack(Stack):
         self.billing_cluster = rds.DatabaseCluster(
             self,
             "BillingLedger",
+            # Engine versions are **regional and time-varying**, and the CDK enum is a
+            # compile-time list of versions that have existed *somewhere*, not a promise
+            # that one exists here. `VER_16_6` synthesised cleanly and CloudFormation
+            # rejected it after ~10 minutes: 16.6 ships only as `16.6-limitless`, a
+            # different engine mode (V8-5). `make preflight` now asks RDS before a deploy
+            # rather than after.
+            #
+            # 16.13 confirmed in-region with `ServerlessV2FeaturesSupport.MinCapacity = 0`,
+            # which is what `serverless_v2_min_capacity=0` below depends on.
             engine=rds.DatabaseClusterEngine.aurora_postgres(
-                version=rds.AuroraPostgresEngineVersion.VER_16_6
+                version=rds.AuroraPostgresEngineVersion.VER_16_13
             ),
             vpc=self.billing_vpc,
             vpc_subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PRIVATE_ISOLATED),
