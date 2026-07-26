@@ -40,8 +40,10 @@ Depends on nothing. Everything else depends on it. **Framework- and cloud-indepe
 contract/
 ├── verbs.py          DiscoverRequest/Response, SoftDeleteRequest/Response, …
 ├── archetypes.py     Archetype enum: AUTHORITATIVE_IDENTITY, WORM, DERIVED_INDEX, …
-├── outcomes.py       Outcome enum: APPLIED | ALREADY_APPLIED | REFUSED | PARTIAL
+├── outcomes.py       Outcome: APPLIED | ALREADY_APPLIED | REFUSED | PARTIAL
+│                  Deletability: NOT_PRESENT | DELETABLE | PARTIAL | BLOCKED_BY_HOLD
 ├── canonical.py      ⚠️ byte-stable canonical JSON. Fragile. CLAUDE.md invariant 4.
+│                  A documented subset of RFC 8785 — ADR-022.
 ├── idempotency.py    sha256(sagaId ‖ systemId ‖ operation ‖ canonical(artifacts))
 └── registry.py       participant registry; conformance tests parameterise over this
 ```
@@ -232,6 +234,10 @@ evals/
 tests/
 ├── unit/           contract, canonicalisation, digest binding, policies, reducers,
 │                   participant handler logic (moto), synth/IAM assertions   [hermetic]
+├── fixtures/
+│   └── canonical/  golden canonical bytes + sha256 per input, carrying the
+│                   canonicalisation schemaVersion. Changing a rule turns these
+│                   red rather than silently re-digesting outstanding approvals.
 ├── conformance/    parameterised over the registry — 5 verbs × 8 participants  [needs AWS]
 └── integration/    full saga; chaos; compensation; resurrection; upgrade canary [needs AWS]
 ```

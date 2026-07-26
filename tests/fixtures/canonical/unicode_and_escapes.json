@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "1.0.0",
+  "description": "NFC normalisation, minimal escaping, and non-ASCII kept as UTF-8.",
+  "input": {
+    "locator": "café/テスト/😀",
+    "kind": "quote\"and\\slash",
+    "count": 0,
+    "retentionUntil": null
+  },
+  "canonical": "{\"count\":0,\"kind\":\"quote\\\"and\\\\slash\",\"locator\":\"café/テスト/😀\",\"retentionUntil\":null}",
+  "sha256": "1e9fa8c578a35e81ddd46202133db1338dee43987a7f3bd673e68f374a27b8cb"
+}

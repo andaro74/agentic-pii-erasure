@@ -39,6 +39,7 @@ is a large part of what makes this repo worth reading.
 | [019](ADR-019-agentcore-memory-priors.md) | AgentCore Memory holds topology priors, never subject data | Accepted |
 | [020](ADR-020-deployed-eval-gate.md) | The recall gate runs against a deployed ephemeral stack | Accepted |
 | [021](ADR-021-s3-vectors-for-cost.md) | S3 Vectors replaces OpenSearch Serverless — a cost decision | Accepted — amends [017](ADR-017-real-aws-participants.md), resolves ARCHITECTURE §16 Q7 |
+| [022](ADR-022-canonical-json-subset.md) | Canonical JSON is a documented subset of RFC 8785 | Accepted — refines [006](ADR-006-approval-binds-to-digest.md) |
 
 ## The supersession chains
 

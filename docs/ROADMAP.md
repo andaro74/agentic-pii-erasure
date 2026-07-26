@@ -43,7 +43,7 @@ There is no local mode ([ADR-017](adr/ADR-017-real-aws-participants.md)), so fro
 
 **Traps:** `redact.py` is invariant 5's mechanism, so even the skeleton gets a test proving an email never survives the scrubber · the foundation stack already contains the DEK registry table, so the "PITR disabled, no backup selection" synth assertion lands here, not later (invariant 14) · the lockfile is part of invariant 9's mechanism, not packaging hygiene — VALIDATION baseline finding #3 is what happens when the pin doesn't cover the layer that breaks.
 
-## - [ ] M1 · The contract
+## - [x] M1 · The contract
 
 **Goal:** `contract/` — the package everything depends on and the highest-risk file in the repo. Entirely hermetic; no AWS.
 
@@ -51,7 +51,7 @@ There is no local mode ([ADR-017](adr/ADR-017-real-aws-participants.md)), so fro
 
 **Hermetic done when:** `make test` green with the canonicalisation stability suite · `mypy --strict` clean.
 
-**Traps:** invariant 4. Any later change to canonicalisation is a breaking change requiring a `schemaVersion` bump and a fixture. Get the property-style tests in *now* — [ADR-006](adr/ADR-006-approval-binds-to-digest.md)'s digest binding is only as strong as this file.
+**Traps:** invariant 4. Any later change to canonicalisation is a breaking change requiring a `schemaVersion` bump and a fixture. The rules that landed are a *documented subset* of RFC 8785 — [ADR-022](adr/ADR-022-canonical-json-subset.md). Get the property-style tests in *now* — [ADR-006](adr/ADR-006-approval-binds-to-digest.md)'s digest binding is only as strong as this file.
 
 ## - [ ] M2 · Participant harness + the two hardest participants + conformance
 

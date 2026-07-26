@@ -1,0 +1,42 @@
+{
+  "schemaVersion": "1.0.0",
+  "description": "A discover response for the relational archetype, holds and all.",
+  "input": {
+    "systemId": "billing-ledger",
+    "archetype": "RELATIONAL",
+    "found": true,
+    "deletability": "BLOCKED_BY_HOLD",
+    "artifacts": [
+      {
+        "kind": "row",
+        "locator": "public.orders",
+        "count": 412,
+        "classification": [
+          "PII",
+          "FINANCIAL"
+        ],
+        "retentionUntil": "2031-04-02T00:00:00Z"
+      },
+      {
+        "kind": "row",
+        "locator": "public.invoices",
+        "count": 8,
+        "classification": [
+          "FINANCIAL"
+        ],
+        "retentionUntil": null
+      }
+    ],
+    "holds": [
+      {
+        "holdId": "LIT-2024-118",
+        "authority": "Legal",
+        "scope": "public.orders",
+        "expiresAt": null,
+        "basis": "GDPR Art.17(3)(e)"
+      }
+    ]
+  },
+  "canonical": "{\"archetype\":\"RELATIONAL\",\"artifacts\":[{\"classification\":[\"FINANCIAL\"],\"count\":8,\"kind\":\"row\",\"locator\":\"public.invoices\",\"retentionUntil\":null},{\"classification\":[\"FINANCIAL\",\"PII\"],\"count\":412,\"kind\":\"row\",\"locator\":\"public.orders\",\"retentionUntil\":\"2031-04-02T00:00:00Z\"}],\"deletability\":\"BLOCKED_BY_HOLD\",\"found\":true,\"holds\":[{\"authority\":\"Legal\",\"basis\":\"GDPR Art.17(3)(e)\",\"expiresAt\":null,\"holdId\":\"LIT-2024-118\",\"scope\":\"public.orders\"}],\"systemId\":\"billing-ledger\"}",
+  "sha256": "24c704bcc94d79dda1591f2772510db9ee106300f8e86793264ee32e06703088"
+}

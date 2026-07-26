@@ -1,0 +1,32 @@
+{
+  "schemaVersion": "1.0.0",
+  "description": "plannedOps is a sequence; artifacts and classification are sets.",
+  "input": {
+    "systemId": "compliance-archive",
+    "plannedOps": [
+      "soft_delete",
+      "hard_delete"
+    ],
+    "artifacts": [
+      {
+        "kind": "object",
+        "locator": "s3://archive/b",
+        "count": 1,
+        "classification": [
+          "PII"
+        ]
+      },
+      {
+        "kind": "object",
+        "locator": "s3://archive/a",
+        "count": 2,
+        "classification": [
+          "SPECIAL",
+          "PII"
+        ]
+      }
+    ]
+  },
+  "canonical": "{\"artifacts\":[{\"classification\":[\"PII\",\"SPECIAL\"],\"count\":2,\"kind\":\"object\",\"locator\":\"s3://archive/a\"},{\"classification\":[\"PII\"],\"count\":1,\"kind\":\"object\",\"locator\":\"s3://archive/b\"}],\"plannedOps\":[\"soft_delete\",\"hard_delete\"],\"systemId\":\"compliance-archive\"}",
+  "sha256": "367d18bfba9a42280e8e2113f3bac334c7915de712fef9e03bf2110c20062d96"
+}

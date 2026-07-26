@@ -220,7 +220,7 @@ Each participant is **one Lambda function registered as an AgentCore Gateway tar
     { "holdId": "LIT-2024-118", "authority": "Legal", "scope": "public.orders",
       "expiresAt": null, "basis": "GDPR Art.17(3)(e)" }
   ],
-  "deletability": "BLOCKED_BY_HOLD",
+  "deletability": "BLOCKED_BY_HOLD",   // NOT_PRESENT | DELETABLE | PARTIAL | BLOCKED_BY_HOLD
   "evidence":     { "queryDigest": "sha256:…", "observedAt": "2026-07-23T10:14:02Z" }
 }
 ```
@@ -1000,6 +1000,7 @@ infra/stacks/  policies/cedar/  evals/  tests/{unit,conformance,integration}  do
 | 019 | AgentCore Memory holds topology priors, never subject data | Cross-subject learning without a PII surface | DynamoDB priors table; Memory as general state |
 | 020 | The eval gate runs against a deployed ephemeral stack | Generated ground truth needs the real services | Mocked eval; hand-labelled fixtures |
 | 021 | **S3 Vectors replaces OpenSearch Serverless — a cost decision** | The OCU floor billed for existing, not working; nothing may now bill continuously | Keep OpenSearch; drop the archetype; tier behind OpenSearch |
+| 022 | Canonical JSON is a documented subset of RFC 8785 | Removes float, normalisation and key-ordering drift instead of implementing them; rejects provenance rather than stripping it | Exact JCS; `json.dumps(sort_keys=True)`; strip volatile keys |
 
 ---
 
