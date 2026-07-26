@@ -697,6 +697,38 @@ discrepancy was visible only because the raw S3 version listing was compared aga
 map rather than the map against itself. Validating an artifact against the system it
 describes is worth more than validating it for internal consistency, which it always has.
 
+### 2026-07-26 · M4's second half: conformance covers all eight, and V8-13 closes
+
+The conformance suite could seed only two of the eight registered participants; the other
+six skipped with "no conformance seeder yet". Structurally that was V8-3's shape aimed at
+the deployed gate itself: `make conformance` would have reported 16 passed / 48 skipped
+and read as green while proving nothing about six participants.
+
+**Seeding now reuses the ground-truth generator's writers** — the code path `make seed`
+already proved against the deployed services, measuring what it writes (V8-12). A bespoke
+conformance seeder would have been a second implementation free to drift from the one the
+recall gate trusts.
+
+**V8-13 closes.** Every test's throwaway subject is torn down in fixture teardown, by
+direct AWS calls rather than the participant's own verbs — cleanup must not depend on the
+behaviour the test just judged. The claim is scoped honestly: Object Lock ciphertext is
+undeletable by anyone until the dev retention window expires (the WORM archetype asserting
+itself on its own test rig), and the idempotency log keeps pseudonymous receipts. Everything
+addressable is removed, including on the sandbox skip path, where the already-created SES
+contact is cleaned before skipping.
+
+**The seam is now guarded hermetically.** `tests/unit/test_conformance_coverage.py`
+asserts PLACEMENTS and `_cleanup` cover the registry exactly, that the "no seeder yet"
+escape hatch stays deleted, and that the subject fixture tears down after `yield`.
+Mutation-tested: dropping a placement fails, and reverting the fixture to a plain return
+fails. Registering participant #9 without conformance coverage now breaks `make check`
+instead of silently skipping the one suite that costs money to run.
+
+**One capability gate remains, by design**: in an SES-sandbox account, notify-suppression's
+tests skip with a reason naming the fix (production access) — a gate that goes mandatory
+the moment the capability exists, not a silencing guard. Expected shape: 56 passed /
+8 skipped in the sandbox; 64 passed / 0 skipped once production access lands.
+
 1. Read a doc claim as an adversary: *what would make this false, and could the
    named control detect it?*
 2. If the control can't go red, that's a finding — record it here with the fix and

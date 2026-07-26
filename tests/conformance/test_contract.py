@@ -13,8 +13,13 @@ Participants whose milestone has not landed **skip with a reason**, and become m
 automatically when their function appears. Same rule as the milestone-gated `make`
 targets: never a silencing guard.
 
-Each case seeds its own throwaway subject and erases it, so the suite needs no `make
-seed` (which lands at M4) and leaves nothing behind.
+Each case seeds its own throwaway subject and tears it down afterwards, so the suite
+needs no `make seed` and repeated runs do not accumulate residue (V8-13). The claim is
+scoped honestly rather than absolutely: ciphertext in the **Object Lock** bucket cannot
+be deleted by anyone — including this teardown — until the dev retention window expires,
+which is the WORM archetype asserting itself on its own test rig; and the idempotency
+log keeps its pseudonymous receipts, which carry no subject data. Everything addressable
+is removed.
 """
 
 from __future__ import annotations
@@ -23,13 +28,24 @@ import base64
 import json
 import os
 import uuid
+from collections.abc import Iterator
 from typing import Any
 
 import boto3
 import pytest
 from botocore.exceptions import ClientError
 
+from evals.fixtures.generator import (
+    FixtureGenerator,
+    SesSandboxError,
+    _purge_versions,
+    _safe_handle,
+)
+from pii_erasure.cli.main import _seed_clients, _stack_config
 from pii_erasure.contract import PARTICIPANTS, Outcome, ParticipantSpec
+from pii_erasure.participants.billing_ledger import handler as billing
+from pii_erasure.participants.billing_ledger.handler import execute_with_resume
+from pii_erasure.participants.vector_index.handler import vector_key
 
 pytestmark = pytest.mark.conformance
 
@@ -77,54 +93,149 @@ def call(client: Any, system_id: str, tool: str, payload: dict[str, Any]) -> dic
     return dict(body)
 
 
-# ─── per-archetype seeding, so the suite is self-contained ────────────────────────────
+# ─── per-archetype seeding and teardown, so the suite is self-contained ───────────────
+# Seeding reuses the ground-truth generator's writers — the same code path `make seed`
+# exercises, already proven against the deployed services and already measuring what it
+# wrote (V8-12). A bespoke conformance seeder would be a second implementation free to
+# drift from the one the recall gate trusts.
 
-
-def _seed_upload_bucket(subject: str) -> None:
-    s3 = boto3.client("s3")
-    bucket = _stack_output("participants", "UploadBucketName")
-    s3.put_object(Bucket=bucket, Key=f"{subject}/passport.pdf", Body=b"fabricated")
-    s3.put_object(Bucket=bucket, Key=f"{subject}/passport.pdf", Body=b"fabricated v2")
-    # A prior "deletion" that deleted nothing — the archetype's whole lesson, seeded so
-    # conformance proves discovery reports it.
-    s3.delete_object(Bucket=bucket, Key=f"{subject}/passport.pdf")
-
-
-def _seed_compliance_archive(subject: str) -> None:
-    s3 = boto3.client("s3")
-    ddb = boto3.client("dynamodb")
-    bucket = _stack_output("participants", "ComplianceArchiveBucketName")
-    s3.put_object(Bucket=bucket, Key=f"{subject}/statement.enc", Body=b"ciphertext")
-    ddb.put_item(
-        TableName=f"asdp-{STAGE}-dek-registry",
-        Item={"subject_ref": {"S": subject}, "wrapped_dek": {"B": b"wrapped-fixture"}},
-    )
-
-
-SEEDERS = {
-    "upload-bucket": _seed_upload_bucket,
-    "compliance-archive": _seed_compliance_archive,
+#: What one throwaway subject gets in each system. Every registered participant MUST
+#: have an entry — asserted hermetically by tests/unit/test_conformance_coverage.py —
+#: so registering participant #9 without extending this table fails `make check`
+#: instead of silently skipping. A skip that reads as coverage is V8-3's shape.
+PLACEMENTS: dict[str, dict[str, int]] = {
+    "cognito-identity": {"users": 1},
+    "profile-store": {"items": 2},
+    "billing-ledger": {"customers": 1, "invoices": 1, "invoice_lines": 1},
+    "upload-bucket": {"objects": 2, "deleteMarkers": 1},
+    "compliance-archive": {"lockedObjects": 1, "wrappedDeks": 1},
+    "vector-index": {"vectors": 3},
+    "analytics-lake": {"rows": 2},
+    "notify-suppression": {"contacts": 1, "suppressionEntries": 1},
 }
 
 
-def _stack_output(stack: str, key: str) -> str:
-    cfn = boto3.client("cloudformation")
-    outputs = cfn.describe_stacks(StackName=f"asdp-{STAGE}-{stack}")["Stacks"][0]["Outputs"]
-    for output in outputs:
-        if output["OutputKey"] == key:
-            return str(output["OutputValue"])
-    raise AssertionError(f"{key} not exported by asdp-{STAGE}-{stack}")
+@pytest.fixture(scope="session")
+def rig() -> tuple[FixtureGenerator, dict[str, str]]:
+    """One generator against the deployed stack, config resolved from its outputs.
+
+    `allow_ses_sandbox=False` deliberately: in a sandbox account the notify-suppression
+    seeder raises, and the fixture converts that into a *reasoned skip* — a capability
+    gate that goes mandatory the moment production access lands, not a silencing guard.
+    """
+    config = _stack_config(os.environ.get("PII_ERASURE_TENANT", "meridian"))
+    return FixtureGenerator(clients=_seed_clients(), config=config), config
 
 
 @pytest.fixture
-def subject(participant: ParticipantSpec) -> str:
-    """A throwaway pseudonymous handle, seeded and then erased. Never real PII."""
+def subject(
+    participant: ParticipantSpec, rig: tuple[FixtureGenerator, dict[str, str]]
+) -> Iterator[str]:
+    """A throwaway pseudonymous handle: seeded, tested against, then torn down. Never real PII."""
+    generator, config = rig
     handle = f"sub_conf_{uuid.uuid4().hex[:12]}"
-    seeder = SEEDERS.get(participant.system_id)
-    if seeder is None:
-        pytest.skip(f"no conformance seeder for {participant.system_id} yet")
-    seeder(handle)
-    return handle
+    throwaway = {
+        "subjectRef": handle,
+        "displayName": "Conformance Fixture",
+        "email": f"{handle}@meridian.invalid",
+    }
+    try:
+        generator._writers()[participant.system_id](throwaway, PLACEMENTS[participant.system_id])
+    except SesSandboxError:
+        # The contact seeded before the suppression write was refused — clean it, or the
+        # skip path itself leaks (V8-13's shape, one layer down).
+        _cleanup(participant.system_id, handle, generator, config)
+        pytest.skip(
+            "SES sandbox: the suppression entry cannot exist, so this archetype's "
+            "residual contract cannot be exercised. Request production access (V8-11); "
+            "these tests become mandatory the moment it lands."
+        )
+    yield handle
+    _cleanup(participant.system_id, handle, generator, config)
+
+
+def _cleanup(
+    system_id: str, handle: str, generator: FixtureGenerator, config: dict[str, str]
+) -> None:
+    """Remove the throwaway subject's data everywhere it is removable (V8-13).
+
+    Direct AWS calls, never the participant's own verbs: tearing down through the system
+    under test would make cleanup depend on the very behaviour the test just judged.
+    Failures here raise — a teardown that swallows its own errors reintroduces the
+    residue this exists to stop, silently.
+    """
+    clients = generator._clients
+    if system_id == "cognito-identity":
+        try:
+            clients["cognito-idp"].admin_delete_user(
+                UserPoolId=config["userPoolId"], Username=handle
+            )
+        except ClientError as error:
+            if error.response["Error"]["Code"] != "UserNotFoundException":
+                raise
+    elif system_id == "profile-store":
+        table = clients["dynamodb"].Table(config["profileTable"])
+        items = table.query(
+            KeyConditionExpression="subject_ref = :s",
+            ExpressionAttributeValues={":s": handle},
+            ConsistentRead=True,
+        ).get("Items", [])
+        for item in items:
+            table.delete_item(Key={"subject_ref": handle, "item_id": item["item_id"]})
+    elif system_id == "billing-ledger":
+        # The participant's own statements, child before parent — cleanup provably
+        # targets the same tables the verbs do, and cannot drift from them.
+        for table_name in billing._DELETE_ORDER:
+            execute_with_resume(
+                clients["rds-data"],
+                resourceArn=config["billingClusterArn"],
+                secretArn=config["billingSecretArn"],
+                database=config["billingDatabase"],
+                sql=billing._DELETE_SQL[table_name],
+                parameters=[{"name": "subject_ref", "value": {"stringValue": handle}}],
+            )
+    elif system_id == "upload-bucket":
+        _purge_versions(clients["s3"], config["uploadBucket"], f"{handle}/")
+    elif system_id == "compliance-archive":
+        # The DEK is the addressable half; shredding it is the archetype's own erasure
+        # mechanism. The ciphertext is COMPLIANCE-locked and undeletable by anyone until
+        # the dev retention window (1 day) expires — that impossibility IS the archetype,
+        # and pretending to delete it would test a world that does not exist.
+        clients["dynamodb"].Table(config["dekRegistryTable"]).delete_item(
+            Key={"subject_ref": handle}
+        )
+    elif system_id == "vector-index":
+        clients["s3vectors"].delete_vectors(
+            vectorBucketName=config["vectorBucket"],
+            indexName=config["vectorIndex"],
+            keys=[vector_key(handle, n) for n in range(PLACEMENTS["vector-index"]["vectors"])],
+        )
+    elif system_id == "analytics-lake":
+        generator._athena(
+            f"DELETE FROM {config['analyticsTable']} WHERE subject_ref = '{_safe_handle(handle)}'"
+        )
+    elif system_id == "notify-suppression":
+        ses = clients["sesv2"]
+        for call in (
+            lambda: ses.delete_contact(
+                ContactListName=config["contactList"],
+                EmailAddress=f"{handle}@meridian.invalid",
+            ),
+            # The test runner's credentials CAN delete a suppression entry — only the
+            # participant's role is denied it (invariant 7 as IAM). Teardown is exactly
+            # the case that permission split exists to allow.
+            lambda: ses.delete_suppressed_destination(EmailAddress=f"{handle}@meridian.invalid"),
+        ):
+            try:
+                call()
+            except ClientError as error:
+                if error.response["Error"]["Code"] not in (
+                    "NotFoundException",
+                    "BadRequestException",
+                ):
+                    raise
+    else:  # pragma: no cover - the coverage guard makes this unreachable
+        raise AssertionError(f"no cleanup for {system_id!r} — extend _cleanup")
 
 
 def _mutation(subject_ref: str, **overrides: Any) -> dict[str, Any]:
