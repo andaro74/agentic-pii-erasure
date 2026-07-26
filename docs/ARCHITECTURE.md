@@ -1007,6 +1007,7 @@ infra/stacks/  policies/cedar/  evals/  tests/{unit,conformance,integration}  do
 | 020 | The eval gate runs against a deployed ephemeral stack | Generated ground truth needs the real services | Mocked eval; hand-labelled fixtures |
 | 021 | **S3 Vectors replaces OpenSearch Serverless — a cost decision** | The OCU floor billed for existing, not working; nothing may now bill continuously | Keep OpenSearch; drop the archetype; tier behind OpenSearch |
 | 022 | Canonical JSON is a documented subset of RFC 8785 | Removes float, normalisation and key-ordering drift instead of implementing them; rejects provenance rather than stripping it | Exact JCS; `json.dumps(sort_keys=True)`; strip volatile keys |
+| 023 | Aurora needs a VPC; the platform still never enters one | No VPC-less Aurora exists; the enforceable property is that nothing we run attaches to one, and the VPC holds nothing that bills | Drop the RELATIONAL archetype; Aurora DSQL; leave the claim uncorrected |
 
 ---
 

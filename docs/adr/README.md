@@ -40,6 +40,7 @@ is a large part of what makes this repo worth reading.
 | [020](ADR-020-deployed-eval-gate.md) | The recall gate runs against a deployed ephemeral stack | Accepted |
 | [021](ADR-021-s3-vectors-for-cost.md) | S3 Vectors replaces OpenSearch Serverless — a cost decision | Accepted — amends [017](ADR-017-real-aws-participants.md), resolves ARCHITECTURE §16 Q7 |
 | [022](ADR-022-canonical-json-subset.md) | Canonical JSON is a documented subset of RFC 8785 | Accepted — refines [006](ADR-006-approval-binds-to-digest.md) |
+| [023](ADR-023-aurora-needs-a-vpc.md) | Aurora needs a VPC; the platform still never enters one | Accepted — clarifies [015](ADR-015-serverless-compute-split.md), [016](ADR-016-serverless-durability.md), [017](ADR-017-real-aws-participants.md) |
 
 ## The supersession chains
 
