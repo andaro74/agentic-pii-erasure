@@ -57,7 +57,7 @@
       },
       "upload-bucket": {
         "deleteMarkers": 1,
-        "objects": 3
+        "objects": 4
       },
       "vector-index": {
         "vectors": 12
