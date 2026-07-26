@@ -234,6 +234,34 @@ directory resolved differently under `make synth` (which runs in `infra/`) and u
 pytest (repo root), which fails as "cannot find asset" in whichever you did not try
 first; and `moto` surfaced a corrupted `cffi` wheel in the venv rather than a bug.
 
+### 2026-07-26 · Pre-flight verification of M5's instructions (requested before starting)
+
+The human asked for M5's roadmap entry to be verified before work began. Every claim was
+checked against the thing that could falsify it, per ROADMAP rule 3:
+
+- **Framework APIs, against the installed pins:** `StateGraph`/`START`/`END` at
+  `langgraph.graph`, `interrupt`/`Command` at `langgraph.types` (langgraph 1.2.9), and
+  `DynamoDBSaver(table_name, …, ttl_seconds, s3_offload_config)` in
+  langgraph-checkpoint-aws 1.2.0 — matching the checkpoint table M0 synthesised.
+- **File and node lists, across four documents:** ROADMAP M5's build list is
+  file-for-file identical with PROJECT-STRUCTURE's `saga/`, `scheduler/`, `approval/`
+  and `ledger/` trees, and its ten node names match ARCHITECTURE §5's state diagram,
+  including `hold_recheck` and `sweep`.
+- **Invariant citations:** 2, 6, 10, 11, 12 all exist in CLAUDE.md under those numbers
+  and say what M5 cites them for. `thread_id == sagaId` is consistent everywhere.
+- **The apparent contradiction that is not one:** PROJECT-STRUCTURE says `plan.py`
+  invokes the Runtime; the Runtime lands at M7. M5's own goal resolves it — the saga
+  executes a *hand-written fixture manifest* (ADR-001), which is what makes the saga
+  testable before discovery exists.
+- **moto's KMS**, since M3's hermetic gate depends on it: `ECC_NIST_P256` sign/verify
+  with `MessageType="DIGEST"` round-trips and rejects a tampered digest.
+
+**No findings.** One structural note, acted on rather than logged as a defect: M5
+imports `manifest/`, which is M3's deliverable (`contract ← manifest ← saga`), so
+"start M5" was executed as M3 first. M4 is deferred behind M5 by explicit human
+instruction — legitimate under ROADMAP rule 1, and workable because M5's fixture
+manifest needs only the two participants M2 built.
+
 1. Read a doc claim as an adversary: *what would make this false, and could the
    named control detect it?*
 2. If the control can't go red, that's a finding — record it here with the fix and

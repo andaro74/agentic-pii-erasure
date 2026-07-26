@@ -232,7 +232,7 @@ conformance: ## 5 verbs x 8 participants, against the deployed stack (M2)
 	else echo "⏳ lands at M2 — docs/ROADMAP.md"; fi
 
 .PHONY: integration
-integration: ## Full three-phase saga against the deployed stack (M5)
+integration: ## Deployed: manifest signing vs the real CMK (M3) + full saga (M5)
 	@if ls tests/integration/test_*.py >/dev/null 2>&1; then \
 		$(PYTEST) tests/integration -m integration; \
 	else echo "⏳ lands at M5 — docs/ROADMAP.md"; fi

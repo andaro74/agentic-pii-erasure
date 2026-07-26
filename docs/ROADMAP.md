@@ -28,7 +28,7 @@ There is no local mode ([ADR-017](adr/ADR-017-real-aws-participants.md)), so fro
 | `install` `lint` `fmt` `test` `synth` | M0 | | `policy-test` | M6 |
 | `conformance` | M2 | | `eval` `eval-adversarial` | M7 |
 | `seed` `inspect` | M4 | | `walkthrough` `threads` `resume` | M8 |
-| `integration` | M5 | | `upgrade-canary` `chaos` | M9 |
+| `integration` | M3 (signing) · M5 (saga) | | `upgrade-canary` `chaos` | M9 |
 | | | | `deploy` (prod stack) | M10 |
 
 ---
@@ -71,7 +71,7 @@ There is no local mode ([ADR-017](adr/ADR-017-real-aws-participants.md)), so fro
 
 **Hermetic done when:** unit tests: mutate any field → digest changes; change provenance (session ID, trace ID, timestamps) → digest identical; sign/verify round-trip against a KMS stub; re-plan produces a new manifest, never edits one.
 
-**Deployed done when:** one signed manifest round-trips against the real CMK.
+**Deployed done when:** `make integration` — one signed manifest round-trips against the real CMK, and a tampered body is rejected.
 
 **Traps:** invariants 3–4 · [ADR-006](adr/ADR-006-approval-binds-to-digest.md) — the approval token will bind to exactly this digest · KMS `Sign` takes a digest, not the message, above 4 KB; get the message-type right or verification fails only in production.
 
