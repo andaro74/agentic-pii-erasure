@@ -52,10 +52,10 @@ GatewayStack(
     app,
     f"asdp-{stage}-gateway",
     stage=stage,
-    participants={
-        "upload-bucket": participants.upload_bucket_fn,
-        "compliance-archive": participants.archive_fn,
-    },
+    # The stack owns this mapping. Listing the participants again here would be a second
+    # place to forget one, and a participant missing from the Gateway is a participant the
+    # agent cannot reach — a recall failure with no error attached.
+    participants=participants.functions,
 )
 
 app.synth()

@@ -389,6 +389,37 @@ The check that found it is cheap and worth repeating whenever a doc describes a 
 behaviour: **read the botocore service model, not the prose.** Required members and shape
 constraints are machine-readable, local, and versioned with the SDK actually installed.
 
+### 2026-07-26 · V8-3 / V8-4 — found by building M4, not by reading it
+
+Two more from the same pass, both surfaced by implementation rather than review. Recorded
+separately because their discovery mode is different: V8-1 and V8-2 came from reading the
+API model *before* writing code; these came from the code refusing to be written.
+
+| ID | Severity | Finding | Resolution |
+|---|---|---|---|
+| V8-3 | **High** | **The conformance suite contained two assertions that cannot both hold.** `test_residual_honesty` requires `analytics-lake` and `notify-suppression` to return `PARTIAL` with a non-empty residual; `test_verify_is_clean_only_after_hard_delete` required `clean is True` for *every* participant; and `VerifyResponse` forbids `clean=True` alongside anything remaining. Satisfying the suite would have required those two participants to claim an erasure they had not performed — the precise dishonesty invariant 7 exists to forbid, demanded by the suite that enforces invariant 7. It was green only because both participants were unbuilt and skipped. | **Fixed, and made stricter.** The assertion is now archetype-aware: residual-by-design participants must report `clean=False`, and their `remaining` set must **equal** the residual their `hard_delete` disclosed. That cross-checks two verbs against each other, so a participant that discloses a residual and then forgets it in `verify` now fails — a stronger claim than the one it replaced. |
+| V8-4 | **Medium** | **"No VPC" was false in seven places.** `README.md`, `ARCHITECTURE.md` (×3), `PROJECT-STRUCTURE.md`, `CLAUDE.md` (×2) and ADR-016 asserted the platform uses no VPC. Aurora Serverless v2 cannot exist outside one — a cluster needs a DB subnet group, which needs subnets. The claim was written when the participants were simulated (ADR-012), where it was true, and survived the rewrite to real services (ADR-017) without being re-checked against them. | **Fixed** in all seven, plus [ADR-023](adr/ADR-023-aurora-needs-a-vpc.md). The enforceable property — *nothing we run attaches to a VPC* — is unchanged and still asserted at synth time. The VPC holds the cluster and nothing else: isolated subnets, no NAT, no IGW, no endpoints, so it bills nothing. A new synth assertion fails if any of those appear. |
+
+**V8-3 is the most interesting defect in this log so far**, because the suite was not
+merely wrong — it was wrong *in the direction of the thing it existed to prevent*. A gate
+that cannot pass without lying is worse than a missing gate, since it applies pressure
+toward the lie. It also could not have been caught by running the suite: skipping is the
+correct behaviour for an unbuilt participant, so the contradiction was invisible until the
+participant existed. **The only way to find it was to try to satisfy it.**
+
+**V8-4's mechanism is now familiar**: a claim that was true of an earlier architecture,
+carried across a rewrite because rewrites update code and rarely re-audit prose. Same
+shape as V5-1 and V8-1. The generalisable check is *when an ADR supersedes another, the
+claims that depended on the superseded decision need re-reading* — ADR-017 replaced
+simulated participants with real ones, and "no VPC" was a property of the simulation.
+
+**A smaller one worth naming**, caught by a test written during this milestone rather than
+after it: `erasure seed` read a CloudFormation output called `DekRegistryTableName`, which
+does not exist — the foundation stack exports `DekRegistryTable`. That is a `KeyError`
+reachable only by a human running `make seed` against a deployed stack, i.e. the slowest
+and most expensive feedback loop available. It is now asserted hermetically: every output
+key the CLI reads is checked against the synthesised templates.
+
 1. Read a doc claim as an adversary: *what would make this false, and could the
    named control detect it?*
 2. If the control can't go red, that's a finding — record it here with the fix and

@@ -4,7 +4,7 @@
 
 A serverless reference implementation of [GDPR Art. 17](https://gdpr-info.eu/art-17-gdpr/) erasure across eight real AWS services, built on [Amazon Bedrock AgentCore](https://docs.aws.amazon.com/bedrock-agentcore/), LangGraph, and a three-phase saga.
 
-**Deploys to AWS. There is no local mode.** No servers, no clusters, no VPC, no always-on compute.
+**Deploys to AWS. There is no local mode.** No servers, no clusters, no always-on compute, and nothing this platform runs attaches to a VPC (ADR-023).
 
 ```bash
 make install && make deploy-dev && make seed && make walkthrough

@@ -91,7 +91,7 @@ class Residual(Artifact):
     """An artifact that could **not** be actioned, and why.
 
     Load-bearing (invariant 7). `notify-suppression` returns one for the SES suppression
-    hash it is legally required to keep; `analytics-lake` for Iceberg rows that survive
+    entry it is legally required to keep; `analytics-lake` for Iceberg rows that survive
     until snapshot expiry. Disclosed to the approver and carried into the certificate.
     """
 

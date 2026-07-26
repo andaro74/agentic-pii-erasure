@@ -69,12 +69,16 @@ Homepage = "https://github.com/YOUR-ORG/agentic-pii-erasure"
 Architecture = "https://github.com/YOUR-ORG/agentic-pii-erasure/blob/main/docs/ARCHITECTURE.md"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/pii_erasure"]
+# `evals` ships too: the CLI's `seed` imports the fixture generator, and a console
+# script cannot rely on the working directory being the repo root.
+packages = ["src/pii_erasure", "evals"]
 
 [tool.ruff]
 line-length = 100
 target-version = "py310"
-src = ["src", "tests"]
+# "." makes `evals` first-party to isort. Omitting an import root silently
+# reclassifies its imports as third-party — the mechanism behind V6-1.
+src = ["src", "tests", "."]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "N", "UP", "B", "A", "C4", "PT", "SIM", "RUF", "S"]

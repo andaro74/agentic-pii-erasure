@@ -83,7 +83,7 @@ participants/
 
 `_base/guard.py` is defence in depth, not redundancy: AgentCore Policy is the control, and the participant is the backstop for a misconfigured Gateway target. A participant that receives a `hard_delete` without a valid digest-bound token refuses, logs, and returns `REFUSED`.
 
-Aurora is reached through the **RDS Data API** specifically so that `billing_ledger` needs no VPC attachment. Nothing in this repo attaches a Lambda to a VPC.
+Aurora is reached through the **RDS Data API** specifically so that `billing_ledger` needs no VPC attachment. Nothing in this repo attaches a Lambda to a VPC. A VPC does exist, because Aurora cannot exist without one — see [ADR-023](adr/ADR-023-aurora-needs-a-vpc.md).
 
 `vector_index/` carries one constraint worth knowing before you read it: S3 Vectors has **no delete-by-query**. `DeleteVectors` takes keys (≤500 per call), so vector keys are derived deterministically from `subjectRef` and never stored in a side mapping table that could be lost independently of the vectors it addresses. It replaced an OpenSearch Serverless participant purely to remove that service's continuous OCU floor ([ADR-021](adr/ADR-021-s3-vectors-for-cost.md)).
 

@@ -8,7 +8,7 @@ A reference implementation of agentic, auditable PII erasure across eight **real
 
 **This platform deploys to AWS. There is no local mode.** No stub model, no SQLite checkpointer, no in-process participants, no `demo-offline`. `make deploy-dev` is the entry point. See [ADR-017](docs/adr/ADR-017-real-aws-participants.md).
 
-Stack: **Amazon Bedrock AgentCore** (Runtime, Gateway, Policy, Identity, Memory, Observability) · **LangGraph + LangChain 1.0** (graphs, agents, middleware) · **Lambda** (the saga) · **DynamoDB** (checkpoints, ledger, registries) · **EventBridge Scheduler** (timers) · **KMS**, **S3 Object Lock**, **S3 Vectors**, **Cognito**, **Aurora Serverless v2**, **Glue/Athena**, **SES** (the participants). **No Step Functions, no Fargate, no VPC** — see ADRs 015–017.
+Stack: **Amazon Bedrock AgentCore** (Runtime, Gateway, Policy, Identity, Memory, Observability) · **LangGraph + LangChain 1.0** (graphs, agents, middleware) · **Lambda** (the saga) · **DynamoDB** (checkpoints, ledger, registries) · **EventBridge Scheduler** (timers) · **KMS**, **S3 Object Lock**, **S3 Vectors**, **Cognito**, **Aurora Serverless v2**, **Glue/Athena**, **SES** (the participants). **No Step Functions, no Fargate, and nothing we run attached to a VPC** — see ADRs 015–017 and [ADR-023](docs/adr/ADR-023-aurora-needs-a-vpc.md), which records why Aurora forces a VPC to *exist* and why no Lambda joins it.
 
 **Nothing in the stack bills continuously for existing rather than for working.** That is a hard constraint, not a nice-to-have: it is why the derived-index participant is S3 Vectors and not OpenSearch Serverless ([ADR-021](docs/adr/ADR-021-s3-vectors-for-cost.md)). Before adding any AWS service, check whether it has a provisioned floor — if it does, it needs an ADR arguing why the floor is worth it.
 
@@ -207,7 +207,7 @@ make destroy-dev    # tear it down. Do this.
 ## AWS specifics
 
 - Bedrock is the model provider. No other provider is configured; adding one is fine, defaulting to one is not.
-- Everything is serverless and nothing attaches to a VPC. Aurora Serverless v2 runs at `min_capacity = 0` ACU and is reached through the RDS Data API.
+- Everything is serverless and nothing we run attaches to a VPC. Aurora Serverless v2 runs at `min_capacity = 0` ACU and is reached through the RDS Data API. A VPC exists solely to hold the cluster — isolated subnets, no NAT, no endpoints, no continuous cost (ADR-023).
 - EventBridge Scheduler fires one-shot schedules at a resume Lambda. Timers are ours; Step Functions is gone.
 - **No component may bill continuously for existing.** S3 Vectors replaced OpenSearch Serverless purely to remove its OCU floor ([ADR-021](docs/adr/ADR-021-s3-vectors-for-cost.md)); an idle stack now costs cents. Bedrock tokens are the largest line item on an active one.
 - **`make destroy-dev` is still not optional**, but the reason is correctness rather than price: dev stacks use a short Object Lock retention period, because a COMPLIANCE-mode bucket cannot be emptied until retention expires — by anyone, including root. `infra/README.md` leads with it.

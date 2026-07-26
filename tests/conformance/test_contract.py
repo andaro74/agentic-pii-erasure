@@ -277,7 +277,27 @@ def test_verify_is_clean_only_after_hard_delete(
             "sagaId": "saga_conf",
         },
     )
-    assert after["clean"] is True
+
+    if not participant.expects_residual:
+        assert after["clean"] is True
+        return
+
+    # Residual by design: `clean` must stay False, because something genuinely remains
+    # (V8-3). Asserting clean=True here would have required these two participants to
+    # claim an erasure they had not performed — the precise dishonesty invariant 7
+    # exists to forbid, demanded by the suite that enforces invariant 7.
+    #
+    # The replacement is stricter, not weaker: it cross-checks two verbs against each
+    # other, so a participant that discloses a residual in `hard_delete` and then
+    # forgets it in `verify` now fails. "Nothing remains" and "what remains is exactly
+    # what I disclosed" are both falsifiable; only the second is true here.
+    assert after["clean"] is False, (
+        f"{participant.system_id} claimed clean while its disclosed residual remains"
+    )
+    assert after["remaining"], "clean=False must name what is still there"
+    assert {(item["kind"], item["locator"]) for item in after["remaining"]} == {
+        (item["kind"], item["locator"]) for item in result["residual"]
+    }, "verify and hard_delete disagree about what survived"
 
 
 def test_residual_honesty(lambda_client: Any, participant: ParticipantSpec, subject: str) -> None:

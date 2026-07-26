@@ -36,7 +36,7 @@ Nothing may hold saga state outside the checkpointer. That rule is unchanged fro
 
 ## Consequences
 
-- **Positive — zero idle cost and no VPC.** DynamoDB on-demand charges for storage and requests only. No cluster, no ENI attachment, no scaled-to-zero cold-start penalty on the state store itself.
+- **Positive — zero idle cost and no VPC attachment.** DynamoDB on-demand charges for storage and requests only. No cluster, no ENI attachment, no scaled-to-zero cold-start penalty on the state store itself.
 - **Positive — resume is genuinely stateless.** Any Lambda in any AZ can pick up any thread. There is no leader, no session affinity, and no warm process to lose.
 - **Positive — S3 offload removes the item-size cliff.** A manifest with hundreds of artifacts would blow DynamoDB's 400 KB item limit; the saver offloads payloads above 350 KB to S3 transparently.
 - **Cost 1 — serialization moved to a younger package.** ADR-014 rejected a DynamoDB checkpointer precisely to keep serialization inside the widely-used Postgres saver. That trade is now reversed deliberately: `DynamoDBSaver` ships in `langgraph-checkpoint-aws`, maintained by AWS in the `langchain-aws` repo, and it is younger. **Invariant #9 therefore extends to it** — `langgraph` *and* `langgraph-checkpoint-aws` are pinned to exact versions and move in lockstep, gated by the upgrade canary. ARCHITECTURE §16 Q6 keeps "is the canary sufficient, or do we need a version-tagged checkpoint envelope?" open.

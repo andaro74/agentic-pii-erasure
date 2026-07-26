@@ -27,6 +27,8 @@ import pytest
 from aws_cdk import App
 from aws_cdk.assertions import Match, Template
 
+from pii_erasure.contract.registry import system_ids
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "infra"))
 
 from stacks.foundation import FoundationStack
@@ -51,10 +53,7 @@ def _app(stage: str, object_lock_days: int) -> tuple[Template, Template]:
         app,
         f"asdp-{stage}-gateway",
         stage=stage,
-        participants={
-            "upload-bucket": participants.upload_bucket_fn,
-            "compliance-archive": participants.archive_fn,
-        },
+        participants=participants.functions,
     )
     return Template.from_stack(participants), Template.from_stack(gateway)
 
@@ -159,8 +158,71 @@ def test_the_archive_participant_cannot_delete_from_its_bucket(participants: Tem
 
 
 def test_no_lambda_attaches_to_a_vpc(participants: Template) -> None:
+    """A VPC now exists, because Aurora cannot exist without one (ADR-023). *This* is the
+    property that was always the real one, and it is unaffected."""
     for function in participants.find_resources("AWS::Lambda::Function").values():
         assert "VpcConfig" not in function["Properties"]
+
+
+def test_the_vpc_has_nothing_in_it_that_bills_for_existing(participants: Template) -> None:
+    """ADR-023's cost claim, made falsifiable.
+
+    A VPC is free. NAT gateways (~$32/month), internet gateways with EIPs, and interface
+    endpoints are not, and adding one is how "an idle stack costs cents" quietly stops
+    being true. Nothing in this VPC needs them: the only thing inside it is Aurora, and
+    everything that talks to Aurora is outside it.
+    """
+    assert participants.find_resources("AWS::EC2::NatGateway") == {}
+    assert participants.find_resources("AWS::EC2::VPCEndpoint") == {}
+    assert participants.find_resources("AWS::EC2::EIP") == {}
+
+
+def test_the_suppression_participant_cannot_delete_a_suppression_entry(
+    participants: Template,
+) -> None:
+    """Invariant 7 as an IAM denial rather than a promise.
+
+    `notify-suppression` must return PARTIAL because the SES suppression entry survives
+    erasure. Nothing stopped a future edit from "fixing" that by deleting the entry — which
+    would silently undo the subject's opt-out and re-enable mail to them, causing the exact
+    harm erasure was requested to prevent. Withholding the permission makes that edit fail
+    with AccessDenied instead of succeeding quietly.
+    """
+    forbidden = [
+        action
+        for statement in _statements(participants)
+        for action in _actions(statement)
+        if action == "ses:DeleteSuppressedDestination"
+    ]
+    assert not forbidden, (
+        "ses:DeleteSuppressedDestination is granted somewhere — the residual that "
+        "invariant 7 requires would become optional"
+    )
+
+
+def test_aurora_is_serverless_v2_scaled_to_zero(participants: Template) -> None:
+    """`min_capacity = 0` is what keeps an idle relational store from billing compute."""
+    participants.has_resource_properties(
+        "AWS::RDS::DBCluster",
+        {
+            "EnableHttpEndpoint": True,  # the Data API — why no Lambda needs the VPC
+            "ServerlessV2ScalingConfiguration": Match.object_like({"MinCapacity": 0}),
+        },
+    )
+
+
+def test_the_declared_snapshot_window_matches_the_participant(participants: Template) -> None:
+    """The residual `analytics-lake` discloses is only honest if the table honours it.
+
+    Two constants in two files, asserted equal here, because a disclosed window the
+    infrastructure does not implement is a fabricated reassurance — worse than no window,
+    since an approver would act on it.
+    """
+    import stacks.participants as infra_stack
+
+    from pii_erasure.participants.analytics_lake import handler as lake
+
+    assert infra_stack.SNAPSHOT_RETENTION_DAYS == lake.SNAPSHOT_RETENTION_DAYS
 
 
 # ─── the gateway ──────────────────────────────────────────────────────────────────────
@@ -181,9 +243,16 @@ def test_no_cedar_policy_engine_is_attached_yet(gateway: Template) -> None:
 
 
 def test_one_target_per_participant(gateway: Template) -> None:
+    """Every registered participant is reachable, and nothing unregistered is.
+
+    Driven from the registry rather than a literal list, so participant #9 is covered the
+    moment it is registered. A participant that exists but has no Gateway target is one
+    the agent cannot call — which shows up as a recall failure with no error attached to
+    it, the exact shape ADR-008 exists to prevent.
+    """
     targets = gateway.find_resources("AWS::BedrockAgentCore::GatewayTarget")
     names = {target["Properties"]["Name"] for target in targets.values()}
-    assert names == {"upload-bucket", "compliance-archive"}
+    assert names == set(system_ids())
 
 
 def test_every_target_publishes_exactly_the_five_verbs(gateway: Template) -> None:

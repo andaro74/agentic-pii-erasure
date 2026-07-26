@@ -77,6 +77,11 @@ There is no local mode ([ADR-017](adr/ADR-017-real-aws-participants.md)), so fro
 
 ## - [ ] M4 · The remaining six participants, seeds, and generated ground truth
 
+> **Hermetic half landed 2026-07-26.** All eight handlers, the Meridian seed set, the
+> ground-truth generator, and `erasure seed` / `erasure inspect`. `make check` green:
+> 380 unit tests, mypy clean, synth clean. The **deployed** gate — `make deploy-dev`,
+> `make seed`, `make conformance` 8/8 — is the human's and has not been run.
+
 **Build:** `cognito_identity`, `profile_store`, `billing_ledger` (Aurora via RDS Data API), `vector_index` (S3 Vectors — [ADR-021](adr/ADR-021-s3-vectors-for-cost.md)), `analytics_lake`, `notify_suppression` · `seeds/` (the Meridian tenant and the seven subjects from the README table — Dmitri's litigation hold in `billing-ledger`, Yuki's injection payload in the `profile-store` bio, Nneka's `PARTIAL` from the SES suppression list) · `evals/fixtures/generator.py` **emitting the ground-truth placement map in the same pass it writes the data** ([ADR-020](adr/ADR-020-deployed-eval-gate.md)) · CLI `seed` and `inspect` become real.
 
 **Hermetic done when:** `make check` green — all eight handlers unit-tested, registry complete.
