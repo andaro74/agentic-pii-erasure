@@ -152,13 +152,8 @@ def test_the_sandbox_opt_in_persists_via_dotenv(
     so the example's default must not silently opt every new user out of the residual
     archetype.
     """
-    (tmp_path / ".env").write_bytes(
-        b"AWS_REGION=us-west-2\r\n" + env_line.encode("ascii")
-    )
-    script = (
-        f"{_load_env_fragment()}\n"
-        'echo "[${ALLOW_SES_SANDBOX:+--allow-ses-sandbox}]"\n'
-    )
+    (tmp_path / ".env").write_bytes(b"AWS_REGION=us-west-2\r\n" + env_line.encode("ascii"))
+    script = f'{_load_env_fragment()}\necho "[${{ALLOW_SES_SANDBOX:+--allow-ses-sandbox}}]"\n'
     env = {
         k: v
         for k, v in os.environ.items()
