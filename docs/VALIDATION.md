@@ -520,6 +520,42 @@ about this repository. The hermetic gate remains the right shape; the honest con
 that the deployed gates are load-bearing rather than confirmatory, and running them earlier
 is worth more than making `make check` stricter.
 
+### 2026-07-26 · V8-8 — the seeder was not re-runnable, and two writers failed silently
+
+`make seed` failed with `UsernameExistsException` on a re-run after V8-7's partial run.
+
+| ID | Severity | Finding | Resolution |
+|---|---|---|---|
+| V8-8 | **High** | **Four of the eight writers were not idempotent, and the reported error was the least serious.** `AdminCreateUser` and `CreateContact` raise on a second run — loud and self-announcing. `PutObject` against the **versioned** upload bucket adds a version rather than replacing one, and an Iceberg `INSERT` appends: after two runs the map would claim `objects=3` while the bucket held six, and the recall gate's denominator would be wrong **with nothing raising**. A generator that inflates what it measures against is worse than one that crashes. | **Fixed.** Every writer now converges. `upload-bucket` purges the subject's versions first, `analytics-lake` deletes the subject's rows first, `compliance-archive` writes only what is missing, and the two identity writers treat "already exists" as the declared state reached. Backed by `tests/unit/test_seed_idempotency.py` — run twice, assert identical map *and* identical underlying counts. |
+
+**The strategies differ by archetype, and that is the interesting part.** Purging is
+correct for `upload-bucket`, and **impossible** for `compliance-archive`: COMPLIANCE-mode
+Object Lock refuses deletion from everyone including root, so the seeder must write only
+what is absent. The archetype asserts itself on the fixture generator exactly as it does on
+the participant — the same lesson arriving from the other side. A generic "delete then
+re-create" seeder would work for seven participants and be unimplementable for the eighth.
+
+**`make seed` is re-run constantly** — after a partial failure, before an eval, when a
+subject is added — so this was never a corner case. It became visible only because V8-7
+left a partial run behind, which is a reminder that a failure's *residue* is part of its
+cost.
+
+**Two bugs in the test, both worth recording**, because they are the same class as the
+defects they were written to catch:
+
+* The fake modelled Object Lock **per client**, so the legitimate `upload-bucket` purge
+  looked like a violation. Object Lock is a property of the *bucket*; one boto3 client
+  serves both. A fake that disagrees with the service about where a control lives will
+  fail honest code and pass dishonest code.
+* The fake then ignored the `Bucket` parameter entirely, so both buckets shared one object
+  list — and since both use `subjectRef/` as a prefix, the archive's existence probe saw
+  the upload bucket's objects and concluded it had nothing to write. The test failed for a
+  reason that had nothing to do with the code under test.
+
+Both were caught by the tests failing in ways the described defect could not explain, which
+is the same signal that found the wrong-reason probe in V7-1. **"Red for a reason I cannot
+account for" is worth as much attention as red itself.**
+
 1. Read a doc claim as an adversary: *what would make this false, and could the
    named control detect it?*
 2. If the control can't go red, that's a finding — record it here with the fix and

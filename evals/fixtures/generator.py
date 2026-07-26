@@ -19,6 +19,25 @@ model: it passes on a fast day, fails on a slow one, and teaches a reader the wr
 Each writer therefore confirms its own write is *readable* before reporting it — a strongly
 consistent read for DynamoDB, a key probe for S3 Vectors, a count query for Aurora.
 
+**Every writer converges** (V8-7). `make seed` is re-run constantly — after a partial
+failure, before an eval, on a fresh subject — so running it twice must leave the same state
+as running it once. Two failure modes were live here and they are not equally visible:
+
+* *Loud*: `AdminCreateUser` and `CreateContact` raise on the second run. Annoying, honest,
+  and self-announcing.
+* *Silent, and far worse*: `PutObject` against a **versioned** bucket adds a version rather
+  than replacing one, and an Iceberg `INSERT` appends. After two runs the map would claim
+  `objects=3` while the bucket held six — and the recall gate's denominator would be wrong
+  with nothing raising. A generator that inflates what it is measuring against is worse
+  than one that crashes.
+
+The strategies differ by archetype because the services differ: `upload-bucket` purges the
+subject's versions first, `analytics-lake` deletes the subject's rows first, and
+`compliance-archive` can do **neither** — Object Lock refuses deletion from everyone
+including root, so it writes only what is not already present. The archetype asserting
+itself on the seeder is the same lesson the participant teaches, arriving from the other
+side.
+
 This module writes to real AWS and is invoked by `make seed`, which is human-only. It is
 importable and unit-testable without an account: nothing happens at import, and every
 client is injected.
@@ -33,6 +52,8 @@ from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+from botocore.exceptions import ClientError
 
 from pii_erasure.participants.billing_ledger.handler import execute_with_resume
 from pii_erasure.participants.notify_suppression.handler import subject_address
@@ -160,12 +181,18 @@ class FixtureGenerator:
     def _write_cognito(self, subject: dict[str, Any], expected: dict[str, int]) -> dict[str, int]:
         idp = self._clients["cognito-idp"]
         pool = self._config["userPoolId"]
-        idp.admin_create_user(
-            UserPoolId=pool,
-            Username=subject["subjectRef"],
-            MessageAction="SUPPRESS",
-            UserAttributes=[{"Name": "email", "Value": subject["email"]}],
-        )
+        try:
+            idp.admin_create_user(
+                UserPoolId=pool,
+                Username=subject["subjectRef"],
+                MessageAction="SUPPRESS",
+                UserAttributes=[{"Name": "email", "Value": subject["email"]}],
+            )
+        except ClientError as error:
+            if error.response["Error"]["Code"] != "UsernameExistsException":
+                raise
+            # Already seeded. The declared state is reached either way, which is what
+            # `run()` promises; erroring here would make a partial run unrecoverable.
         username = subject["subjectRef"]
         _await_readable(
             lambda: _exists(lambda: idp.admin_get_user(UserPoolId=pool, Username=username)),
@@ -257,6 +284,11 @@ class FixtureGenerator:
         objects = expected.get("objects", 0)
         markers = expected.get("deleteMarkers", 0)
 
+        # Purge first. The bucket is versioned, so re-running without this adds a new
+        # version per object per run: the map would say objects=3 while the bucket held
+        # six, and the recall denominator would be quietly wrong. Nothing announces that.
+        _purge_versions(s3, bucket, f"{subject['subjectRef']}/")
+
         for index in range(objects):
             s3.put_object(
                 Bucket=bucket,
@@ -277,7 +309,14 @@ class FixtureGenerator:
         bucket = self._config["archiveBucket"]
         objects = expected.get("lockedObjects", 0)
 
-        for index in range(objects):
+        # The purge that `_write_uploads` performs is *impossible* here: COMPLIANCE-mode
+        # Object Lock refuses deletion from everyone including root until retention
+        # expires. So the only idempotent move is to write what is not already there.
+        # This is the archetype asserting itself on the seeder, which is fitting.
+        existing = s3.list_objects_v2(Bucket=bucket, Prefix=f"{subject['subjectRef']}/").get(
+            "KeyCount", 0
+        )
+        for index in range(existing, objects):
             s3.put_object(
                 Bucket=bucket,
                 Key=f"{subject['subjectRef']}/statement-{index:03d}.enc",
@@ -335,6 +374,12 @@ class FixtureGenerator:
             # That is the mechanism behind the suppression below; without it, "the seed file
             # is trusted" would be an assertion with nothing enforcing it.
             handle = _safe_handle(subject["subjectRef"])
+            # Iceberg INSERT appends. Without this the row count doubles per run and the
+            # ground-truth map silently understates what discovery will find.
+            self._athena(
+                f"DELETE FROM {self._config['analyticsTable']} "  # noqa: S608
+                f"WHERE subject_ref = '{handle}'"
+            )
             values = ", ".join(f"('{handle}', 'event-{n}')" for n in range(rows))
             self._athena(
                 f"INSERT INTO {self._config['analyticsTable']} (subject_ref, event) "  # noqa: S608
@@ -348,7 +393,13 @@ class FixtureGenerator:
         ses = self._clients["sesv2"]
         address = subject_address(subject["subjectRef"])
         if expected.get("contacts"):
-            ses.create_contact(ContactListName=self._config["contactList"], EmailAddress=address)
+            try:
+                ses.create_contact(
+                    ContactListName=self._config["contactList"], EmailAddress=address
+                )
+            except ClientError as error:
+                if error.response["Error"]["Code"] != "AlreadyExistsException":
+                    raise
         if expected.get("suppressionEntries"):
             ses.put_suppressed_destination(EmailAddress=address, Reason="COMPLAINT")
         return {
@@ -408,6 +459,29 @@ def _safe_handle(subject_ref: str) -> str:
             "interpolate it into a statement"
         )
     return subject_ref
+
+
+def _purge_versions(s3: Any, bucket: str, prefix: str) -> int:
+    """Remove every version and delete marker under `prefix`. Returns how many.
+
+    Deliberately version-scoped: `delete_object` on a versioned bucket writes a delete
+    marker and removes nothing, which is the lesson `upload-bucket` exists to teach. A
+    seeder that fell for it would leave the previous run's objects in place *and* add a
+    marker, so the count would grow in two dimensions at once.
+    """
+    removed = 0
+    paginator = s3.get_paginator("list_object_versions")
+    for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+        targets = [
+            {"Key": entry["Key"], "VersionId": entry["VersionId"]}
+            for entry in page.get("Versions", []) + page.get("DeleteMarkers", [])
+        ]
+        for start in range(0, len(targets), 1000):  # DeleteObjects caps at 1000
+            s3.delete_objects(
+                Bucket=bucket, Delete={"Objects": targets[start : start + 1000], "Quiet": True}
+            )
+        removed += len(targets)
+    return removed
 
 
 def _exists(call: Callable[[], Any]) -> bool:
