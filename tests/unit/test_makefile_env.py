@@ -119,3 +119,55 @@ def test_missing_region_fails_loudly(tmp_path: Path) -> None:
 
     assert result.returncode != 0
     assert "reached" not in result.stdout
+
+
+def test_seed_wires_load_env_ahead_of_the_sandbox_flag() -> None:
+    """The static half of the persistence claim: `.env` can only feed the expansion if
+    the recipe sources it first. If someone reorders the recipe, this names the break."""
+    seed = _recipes()["seed"]
+    assert "$(LOAD_ENV)" in seed
+    assert "ALLOW_SES_SANDBOX:+--allow-ses-sandbox" in seed
+    assert seed.index("$(LOAD_ENV)") < seed.index("ALLOW_SES_SANDBOX"), (
+        "LOAD_ENV must run before the flag expands, or .env cannot persist the opt-in"
+    )
+
+
+@pytest.mark.skipif(BASH is None, reason="the Makefile requires bash anyway")
+@pytest.mark.parametrize(
+    ("env_line", "expected"),
+    [
+        ("ALLOW_SES_SANDBOX=1\r\n", "--allow-ses-sandbox"),  # persisted opt-in fires
+        ("ALLOW_SES_SANDBOX=\r\n", ""),  # empty (the .env.example default) stays off
+        ("", ""),  # absent stays off
+    ],
+)
+def test_the_sandbox_opt_in_persists_via_dotenv(
+    tmp_path: Path, env_line: str, expected: str
+) -> None:
+    """The behavioral half: a `.env` value must actually reach the recipe's expansion.
+
+    This is what makes documenting ALLOW_SES_SANDBOX in .env.example a setting with a
+    mechanism rather than V4-4's failure shape — an intention nothing reads. The empty
+    case matters as much as the set case: `make install` copies the example to `.env`,
+    so the example's default must not silently opt every new user out of the residual
+    archetype.
+    """
+    (tmp_path / ".env").write_bytes(
+        b"AWS_REGION=us-west-2\r\n" + env_line.encode("ascii")
+    )
+    script = (
+        f"{_load_env_fragment()}\n"
+        'echo "[${ALLOW_SES_SANDBOX:+--allow-ses-sandbox}]"\n'
+    )
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in ("AWS_REGION", "PII_ERASURE_STAGE", "ALLOW_SES_SANDBOX")
+    }
+
+    result = subprocess.run(
+        [BASH, "-c", script], cwd=tmp_path, env=env, capture_output=True, text=True
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == f"[{expected}]"
