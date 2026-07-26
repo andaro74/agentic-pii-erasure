@@ -65,12 +65,12 @@ There is no local mode ([ADR-017](adr/ADR-017-real-aws-participants.md)), so fro
 
 **Traps:** invariant 7 (`PARTIAL` + `residual`, never a hopeful `APPLIED`) · conformance asserts `discover` is side-effect-free via a snapshot diff **of the real bucket**, including version and delete-marker state · replayed idempotency key → `ALREADY_APPLIED`, not double-apply · [ADR-007](adr/ADR-007-crypto-shredding-for-worm.md)'s trap: the DEK registry is excluded from every backup path, asserted by test **and** by the synth assertion from M0 · dev stacks use a short Object Lock retention or the bucket cannot be torn down.
 
-## - [ ] M3 · Manifest + KMS signing
+## - [x] M3 · Manifest + KMS signing
 
-> **Hermetic half landed 2026-07-26** (commit `6dcb91f`). Models, digest, KMS signing and
-> validation, with 40 unit tests. The **deployed** gate — `make integration` — is the
-> human's and **has not been run**. It needs only the foundation stack's CMK, so it does
-> not depend on M4 and can be run at any time.
+> **Complete 2026-07-26.** Hermetic half in `6dcb91f` (40 unit tests). Deployed gate run
+> by the human; corroborated in CloudTrail by the suite's exact KMS signature — 2 Sign +
+> 2 Verify per run, with the tampered-body test producing **no** Verify because the digest
+> recomputation rejects it before KMS is asked, which is the order `signing.py` promises.
 
 **Build:** `manifest/{models,digest,signing,validate}.py` — Pydantic v2 models, digest over `canonical()` of the body (**provenance excluded**), KMS asymmetric sign/verify (`ECC_NIST_P256`), immutability after signature.
 
@@ -82,10 +82,12 @@ There is no local mode ([ADR-017](adr/ADR-017-real-aws-participants.md)), so fro
 
 ## - [ ] M4 · The remaining six participants, seeds, and generated ground truth
 
-> **Hermetic half landed 2026-07-26.** All eight handlers, the Meridian seed set, the
-> ground-truth generator, and `erasure seed` / `erasure inspect`. `make check` green:
-> 380 unit tests, mypy clean, synth clean. The **deployed** gate — `make deploy-dev`,
-> `make seed`, `make conformance` 8/8 — is the human's and has not been run.
+> **Hermetic half + validated seed landed 2026-07-26.** All eight handlers, the Meridian
+> seed set, the measuring ground-truth generator (V8-12), conformance seeding/teardown for
+> all eight (V8-13 closed), and `erasure seed` / `erasure inspect`. `make seed` ran and was
+> **validated against the services** (map == deployed discover == raw listings). Remaining
+> for the tick: `make deploy-dev && make conformance` — expect 56 passed / 8 skipped in an
+> SES-sandbox account, 64 / 0 with production access.
 
 **Build:** `cognito_identity`, `profile_store`, `billing_ledger` (Aurora via RDS Data API), `vector_index` (S3 Vectors — [ADR-021](adr/ADR-021-s3-vectors-for-cost.md)), `analytics_lake`, `notify_suppression` · `seeds/` (the Meridian tenant and the seven subjects from the README table — Dmitri's litigation hold in `billing-ledger`, Yuki's injection payload in the `profile-store` bio, Nneka's `PARTIAL` from the SES suppression list) · `evals/fixtures/generator.py` **emitting the ground-truth placement map in the same pass it writes the data** ([ADR-020](adr/ADR-020-deployed-eval-gate.md)) · CLI `seed` and `inspect` become real.
 
