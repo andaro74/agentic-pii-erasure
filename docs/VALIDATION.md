@@ -292,6 +292,45 @@ tree was correct. The class is "the repository differs from the machine", and th
 mechanism that sees it is one that asks git rather than the filesystem. Worth remembering
 when adding future guards.
 
+### 2026-07-26 · V7-1 — every participant Lambda died at cold start
+
+The first defect found by real AWS. `make deploy-dev` succeeded, all three stacks reached
+`CREATE_COMPLETE`, and `make conformance` failed on its first call.
+
+| ID | Severity | Finding | Resolution |
+|---|---|---|---|
+| V7-1 | **High** | **`pii_erasure/__init__.py` resolved its own version through `importlib.metadata` at import time**, so importing the package required the distribution to be pip-installed. `make package` stages the Lambda asset by *copying* `src/pii_erasure` — there is no `.dist-info` in the artifact — so both participants failed every invocation with `Runtime.ImportModuleError: No package metadata was found for agentic-pii-erasure`. 34 errored invocations, not one contract assertion ever reached. | **Fixed.** `__version__` is now resolved lazily via a module-level `__getattr__`, so the lookup happens on attribute access (the CLI, which is always installed) and never during import (every Lambda). Absent metadata returns `0+unknown` rather than a fabricated number. Backed by `tests/unit/test_lambda_asset_imports.py`. |
+
+**Why every hermetic gate passed.** `make check` imports `pii_erasure` from the venv,
+where an editable install puts the metadata exactly where the code expected it. `cdk
+synth` asserts the asset *directory* exists but never imports from it. Nothing hermetic
+had ever executed the bytes that get uploaded. The shape is V6-1's, one artifact further
+along: **the gate tested the repository, not the thing built from it.** V6-1 was "the
+repository differs from the machine"; this is "the artifact differs from the repository."
+
+**The guard is two independent mechanisms**, matching how invariant 1 is enforced:
+
+- an *executable* probe that copies the package to a scratch directory, rebuilds `sys.path`
+  to exclude the repo's source roots, strips editable-install meta path finders, makes
+  `importlib.metadata` report the distribution absent, and imports every participant
+  handler. It reproduces the CloudWatch traceback verbatim — same exception, same file,
+  same line — which is the standard for saying a hermetic test covers a deployed failure.
+- a *structural* check parameterised over every module in the package, failing any
+  module-level call into `importlib.metadata`. The probe only covers modules a handler
+  reaches today; this one covers the modules a later milestone will put on the cold-start
+  path.
+
+Both were written before the fix and went red on the live bug; the fix was then reverted
+to confirm both still fail with the corrected probe, since the first version of the probe
+failed for the *wrong* reason (`sys.path = [asset]` drops the standard library, so it died
+on `import importlib` rather than on the defect). **A test that fails for the wrong reason
+is not evidence — it is a coincidence that happens to be the right colour.**
+
+**Honest limit.** The probe supplies third-party dependencies from site-packages, so it
+cannot see a dependency the asset fails to vendor. `make conformance` remains the only
+gate for that, which is ADR-017's argument restated: a hermetic test proves what its
+author already modelled.
+
 1. Read a doc claim as an adversary: *what would make this false, and could the
    named control detect it?*
 2. If the control can't go red, that's a finding — record it here with the fix and
