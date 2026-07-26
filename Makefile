@@ -142,7 +142,11 @@ LAMBDA_PY := 3.12
 
 .PHONY: package
 package: ## Stage the participant Lambda asset (handler code + deps). Runs before deploy.
-	@rm -rf $(LAMBDA_ASSET) && mkdir -p $(LAMBDA_ASSET)
+	@# Clear the staging dir but KEEP .gitkeep: it is a tracked file, and an
+	@# `rm -rf` here shows up as a deletion that a careless `git add -A` commits,
+	@# which breaks `cdk synth` for the next person to clone without packaging.
+	@mkdir -p $(LAMBDA_ASSET)
+	@find $(LAMBDA_ASSET) -mindepth 1 -maxdepth 1 ! -name .gitkeep -exec rm -rf {} +
 	$(PY) -m pip install --quiet --target $(LAMBDA_ASSET) \
 		--platform $(LAMBDA_PLATFORM) --python-version $(LAMBDA_PY) \
 		--implementation cp --only-binary=:all: \

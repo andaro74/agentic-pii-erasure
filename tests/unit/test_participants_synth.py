@@ -242,3 +242,14 @@ def test_the_gateway_trusts_only_the_agentcore_service(gateway: Template) -> Non
             )
         },
     )
+
+
+def test_the_lambda_asset_marker_is_present() -> None:
+    """`Code.from_asset` needs the directory to exist for synth to resolve at all.
+
+    It is committed empty except for this marker, and `make package` is careful not to
+    delete it — an `rm -rf` there shows up as a deletion that a careless `git add -A`
+    commits, and the next person to clone gets a synth failure they did not cause.
+    """
+    marker = Path(__file__).resolve().parents[2] / "infra" / "build" / "participants" / ".gitkeep"
+    assert marker.is_file(), "the committed asset marker is gone — see `make package`"
