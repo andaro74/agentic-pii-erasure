@@ -262,6 +262,11 @@ imports `manifest/`, which is M3's deliverable (`contract ← manifest ← saga`
 instruction — legitimate under ROADMAP rule 1, and workable because M5's fixture
 manifest needs only the two participants M2 built.
 
+> **Retraction, same day.** The human clarified that "start M5" was a typo for "start
+> M3" — which is what had been built anyway, since M3 was M5's prerequisite. The
+> deferral of M4 is therefore void and the book order resumes: M4 is next. Kept on the
+> record rather than edited away, because a log that rewrites its reasoning is not a log.
+
 1. Read a doc claim as an adversary: *what would make this false, and could the
    named control detect it?*
 2. If the control can't go red, that's a finding — record it here with the fix and
