@@ -30,15 +30,15 @@ jobs:
   hermetic:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"        # exact-pinned deps predate 3.13/3.14 — see ADR-016
 
       - name: Cache pip
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/pip
           key: pip-${{ runner.os }}-${{ hashFiles('pyproject.toml') }}
@@ -70,9 +70,9 @@ jobs:
       PII_ERASURE_MODEL_ID: ${{ vars.PII_ERASURE_MODEL_ID }}
       PII_ERASURE_DEV_OBJECT_LOCK_DAYS: "1"   # or the archive bucket cannot be torn down
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -80,7 +80,7 @@ jobs:
         run: make install
 
       - name: Assume the CI role (OIDC)
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ vars.AWS_CI_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
@@ -128,7 +128,7 @@ jobs:
       PII_ERASURE_MODEL_ID: ${{ vars.PII_ERASURE_MODEL_ID }}
       PII_ERASURE_DEV_OBJECT_LOCK_DAYS: "1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0            # need history to diff against the true base, not just HEAD~1
 
@@ -156,7 +156,7 @@ jobs:
             echo "Pins unchanged in $RANGE — canary not required for this change."
           fi
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         if: steps.pins.outputs.changed == 'true'
         with:
           python-version: "3.12"
@@ -167,7 +167,7 @@ jobs:
 
       - name: Assume the CI role (OIDC)
         if: steps.pins.outputs.changed == 'true'
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ vars.AWS_CI_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
