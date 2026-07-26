@@ -485,6 +485,41 @@ exemption for unbuilt commands is itself guarded: a *built* command carrying
 `ignore_unknown_options` would accept `--typo` in silence, so a second test fails if the
 exemption is ever used outside `_UNBUILT`. Both verified by mutation.
 
+### 2026-07-26 · V8-7 — the 0-ACU floor has a runtime consequence nobody had handled
+
+`make seed` failed with `DatabaseResumingException`.
+
+| ID | Severity | Finding | Resolution |
+|---|---|---|---|
+| V8-7 | **High** | **Nothing handled Aurora's auto-pause resume.** `serverless_v2_min_capacity = 0` means the cluster pauses when idle, and the first statement afterwards fails with `DatabaseResumingException` while it wakes. The API models this as a **400 with `retryable` unset**, so botocore's default retry policy does not touch it. Both the seeder and the `billing-ledger` participant would have failed on the first call after any idle period — and in a saga that means an erasure failing because the database was asleep. Phase 3 does not compensate (invariant 6), so a spurious failure there is expensive to unwind. | **Fixed.** `execute_with_resume()` waits out the resume with a bounded budget (120s) and fails loudly past it. Used by the participant *and* the generator, so the behaviour has one definition. `billing-ledger`'s Lambda timeout raised to 180s, since a function killed mid-wait converts a pause into a failure. |
+
+**This is the cost rule's bill arriving.** [ADR-021](adr/ADR-021-s3-vectors-for-cost.md)
+says nothing may bill continuously for existing, and `min_capacity = 0` is how the
+relational archetype satisfies it. The trade was documented as "cold-resume latency" — a
+performance note. It is not: it is a **distinct error code on the first call**, which is a
+correctness concern, and the doc's framing hid that. The synth assertion proving
+`MinCapacity: 0` was green throughout; it asserts the setting exists, and could not assert
+that anything copes with what the setting causes.
+
+**Only the resume error is retried.** `DatabaseUnavailableException` and the rest
+propagate. "The cluster is waking up" is a known, self-clearing state with a documented
+end; "the cluster is unavailable" is not, and silently retrying a delete against an
+unhealthy database is a different risk that deserves a different answer rather than being
+folded into the same loop.
+
+**A useful thing the failure confirmed.** Reaching `DatabaseResumingException` proves the
+statement got to the cluster, which settles the open question from V8-5: **the RDS Data API
+does work on Aurora PostgreSQL 16.13.** `describe-db-engine-versions` returns null for
+`SupportsHttpEndpoint` on this engine family, so it could not be confirmed in advance —
+recorded here rather than left as an open uncertainty.
+
+**Pattern across V8-5, V8-6 and V8-7.** All three were found by *running* the thing, and
+none was reachable by any hermetic gate: regional version availability, the Makefile→CLI
+seam, and a service's cold-start error taxonomy are all facts about the world rather than
+about this repository. The hermetic gate remains the right shape; the honest conclusion is
+that the deployed gates are load-bearing rather than confirmatory, and running them earlier
+is worth more than making `make check` stricter.
+
 1. Read a doc claim as an adversary: *what would make this false, and could the
    named control detect it?*
 2. If the control can't go red, that's a finding — record it here with the fix and

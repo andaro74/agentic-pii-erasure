@@ -39,7 +39,12 @@ from pii_erasure.participants.analytics_lake.handler import (
     AthenaTimeoutError,
     _identifier,
 )
-from pii_erasure.participants.billing_ledger.handler import _DELETE_ORDER, BillingLedger
+from pii_erasure.participants.billing_ledger.handler import (
+    _DELETE_ORDER,
+    BillingLedger,
+    DatabaseResumeTimeoutError,
+    execute_with_resume,
+)
 from pii_erasure.participants.cognito_identity.handler import CognitoIdentity
 from pii_erasure.participants.notify_suppression.handler import (
     SUPPRESSION_KIND,
@@ -666,3 +671,73 @@ def test_catalog_identifiers_are_validated_not_trusted() -> None:
     for hostile in ('events" ; DROP TABLE x --', "events-1", "", "1events"):
         with pytest.raises(ValueError, match="not a plain SQL identifier"):
             _identifier(hostile, field="ATHENA_TABLE")
+
+
+# ─── Aurora auto-pause resume (V8-7) ──────────────────────────────────────────────────
+
+
+class _ResumingDataApi:
+    """Raises DatabaseResumingException `n` times, then succeeds — the real wake sequence."""
+
+    def __init__(self, resumes: int) -> None:
+        self.remaining = resumes
+        self.calls = 0
+
+    def execute_statement(self, **_: Any) -> dict[str, Any]:
+        self.calls += 1
+        if self.remaining > 0:
+            self.remaining -= 1
+            raise ClientError(
+                {"Error": {"Code": "DatabaseResumingException", "Message": "resuming"}},
+                "ExecuteStatement",
+            )
+        return {"numberOfRecordsUpdated": 1}
+
+
+def test_a_resuming_cluster_is_waited_out_not_failed() -> None:
+    """`min_capacity = 0` auto-pauses, so the first statement after idle always sees this.
+
+    Letting it propagate would fail an erasure because the database was asleep — and phase
+    3 does not compensate (invariant 6), so a spurious failure there is expensive.
+    """
+    fake = _ResumingDataApi(resumes=3)
+    slept: list[float] = []
+
+    result = execute_with_resume(fake, sleep=slept.append, sql="SELECT 1")
+
+    assert result == {"numberOfRecordsUpdated": 1}
+    assert fake.calls == 4, "three resume responses, then the real one"
+    assert len(slept) == 3, "it must wait between attempts, not spin"
+
+
+def test_the_resume_wait_is_bounded_and_fails_loudly() -> None:
+    """A cluster that never wakes must not be reported as a completed statement."""
+    clock = iter([0.0, 0.0, 200.0, 400.0])
+
+    with pytest.raises(DatabaseResumeTimeoutError, match="still resuming"):
+        execute_with_resume(
+            _ResumingDataApi(resumes=99),
+            sleep=lambda _: None,
+            monotonic=lambda: next(clock),
+            sql="SELECT 1",
+        )
+
+
+def test_only_the_resume_error_is_retried() -> None:
+    """`DatabaseUnavailable` is not self-clearing; retrying a delete against an unhealthy
+    database is a different risk with a different answer."""
+
+    class _Unavailable:
+        calls = 0
+
+        def execute_statement(self, **_: Any) -> dict[str, Any]:
+            type(self).calls += 1
+            raise ClientError(
+                {"Error": {"Code": "DatabaseUnavailableException", "Message": "down"}},
+                "ExecuteStatement",
+            )
+
+    client = _Unavailable()
+    with pytest.raises(ClientError):
+        execute_with_resume(client, sleep=lambda _: None, sql="SELECT 1")
+    assert _Unavailable.calls == 1, "it must not be retried"

@@ -34,6 +34,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from pii_erasure.participants.billing_ledger.handler import execute_with_resume
 from pii_erasure.participants.notify_suppression.handler import subject_address
 from pii_erasure.participants.vector_index.handler import VECTOR_DIMENSION, vector_key
 
@@ -358,7 +359,11 @@ class FixtureGenerator:
     # ── plumbing ─────────────────────────────────────────────────────────────────────
 
     def _sql(self, statement: str, **params: Any) -> Any:
-        return self._clients["rds-data"].execute_statement(
+        # Same helper the participant uses. The seeder is usually the *first* thing to
+        # touch a freshly deployed cluster, so it meets the auto-pause resume before
+        # anything else does — and defining the wait twice would let the two drift.
+        return execute_with_resume(
+            self._clients["rds-data"],
             resourceArn=self._config["billingClusterArn"],
             secretArn=self._config["billingSecretArn"],
             database=self._config["billingDatabase"],

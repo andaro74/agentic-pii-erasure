@@ -34,9 +34,11 @@ reachable from a Lambda that attaches to no network — asserted at synth time.
 from __future__ import annotations
 
 import os
+import time
 from typing import Any
 
 import boto3
+from botocore.exceptions import ClientError
 
 from pii_erasure.contract import (
     Archetype,
@@ -96,6 +98,56 @@ _HOLDS_SQL = (
 )
 
 _MARK_SQL = "UPDATE public.invoices SET pending_delete = :pending WHERE subject_ref = :subject_ref"
+
+#: Aurora Serverless v2 at `min_capacity = 0` **auto-pauses**, and the first statement
+#: afterwards fails with `DatabaseResumingException` while the instance wakes. This is not
+#: an error condition — it is the documented price of the 0-ACU floor that keeps an idle
+#: stack from billing compute (ADR-021's rule).
+#:
+#: It must be handled here rather than left to boto3: the API models it as a **400 with
+#: `retryable` unset**, so botocore's default retry policy does not touch it. A saga node
+#: that let it propagate would fail an erasure because the database was asleep — and
+#: phase 3 does not compensate (invariant 6), so a spurious failure there is expensive.
+_RESUMING = "DatabaseResumingException"
+
+#: Bounded. Resume is normally seconds; a couple of minutes means something else is wrong
+#: and the caller must hear about it rather than sit in a loop until Lambda kills it.
+RESUME_TIMEOUT_SECONDS = 120.0
+_RESUME_POLL_SECONDS = 2.0
+
+
+class DatabaseResumeTimeoutError(RuntimeError):
+    """The cluster did not finish resuming in time. Never reported as a completed verb."""
+
+
+def execute_with_resume(
+    client: Any,
+    *,
+    timeout: float = RESUME_TIMEOUT_SECONDS,
+    sleep: Any = time.sleep,
+    monotonic: Any = time.monotonic,
+    **kwargs: Any,
+) -> dict[str, Any]:
+    """`ExecuteStatement`, waiting out an auto-pause resume.
+
+    Only `DatabaseResumingException` is retried. `DatabaseUnavailableException` and the
+    rest propagate: "the cluster is waking up" is a known, self-clearing state, while
+    "the cluster is unavailable" is not, and quietly retrying a delete against an unhealthy
+    database is a different risk with a different answer.
+    """
+    deadline = monotonic() + timeout
+    while True:
+        try:
+            return dict(client.execute_statement(**kwargs))
+        except ClientError as error:
+            if error.response["Error"]["Code"] != _RESUMING:
+                raise
+            if monotonic() >= deadline:
+                raise DatabaseResumeTimeoutError(
+                    f"Aurora was still resuming after {timeout}s — refusing to report an "
+                    "outcome for a statement that never ran"
+                ) from error
+            sleep(_RESUME_POLL_SECONDS)
 
 
 class BillingLedger(Participant):
@@ -240,17 +292,14 @@ class BillingLedger(Participant):
 
     def _execute(self, sql: str, **params: Any) -> dict[str, Any]:
         """One parameterised statement. Values are bound, never interpolated."""
-        return dict(
-            self._data.execute_statement(
-                resourceArn=self._cluster,
-                secretArn=self._secret,
-                database=self._database,
-                sql=sql,
-                parameters=[
-                    {"name": name, "value": _field(value)} for name, value in params.items()
-                ],
-                includeResultMetadata=True,
-            )
+        return execute_with_resume(
+            self._data,
+            resourceArn=self._cluster,
+            secretArn=self._secret,
+            database=self._database,
+            sql=sql,
+            parameters=[{"name": name, "value": _field(value)} for name, value in params.items()],
+            includeResultMetadata=True,
         )
 
     def _counts(self, subject_ref: str) -> dict[str, int]:

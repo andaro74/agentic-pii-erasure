@@ -358,6 +358,11 @@ class ParticipantsStack(Stack):
                 "DB_NAME": "billing",
                 "IDEMPOTENCY_TABLE": idempotency.table_name,
             },
+            # Must exceed the participant's resume budget (120s), or the function is killed
+            # mid-wait and the auto-pause the 0-ACU floor causes becomes an erasure failure
+            # rather than a pause. The extra cost is a few seconds of Lambda time on the
+            # first call after an idle period.
+            timeout=Duration.seconds(180),
         )
         self.billing_fn.add_to_role_policy(
             iam.PolicyStatement(
