@@ -14,7 +14,7 @@ stateDiagram-v2
     end note
 
     state "PHASE 1 — DISCOVER (read-only)" as P1 {
-        Discovery: 🔍 Discovery subgraph, parallel
+        Discovery: 🔍 Discovery subgraph on AgentCore Runtime
         HoldCheck: ⚖️ Legal hold evaluation
         Planning: 📋 Manifest synthesis + KMS signature
         Discovery --> HoldCheck
@@ -22,7 +22,7 @@ stateDiagram-v2
     }
 
     state "PHASE 2 — SOFT DELETE (compensatable)" as P2 {
-        Revoke: 🔒 Revoke identity FIRST
+        Revoke: 🔒 Revoke Cognito identity FIRST
         SoftAll: 🗃️ soft_delete all participants
         VerifySoft: ✅ Verify soft state
         Revoke --> SoftAll
@@ -46,10 +46,11 @@ stateDiagram-v2
 
     AwaitApproval: ⏸️ HUMAN APPROVAL GATE
     note left of AwaitApproval
-        interrupt() — state checkpointed,
-        process exits. Days to weeks.
-        EventBridge Scheduler holds the
-        timeout. Silence implies DENY.
+        interrupt() — state checkpointed
+        to DynamoDB, Lambda RETURNS.
+        Days to weeks. EventBridge
+        Scheduler holds the timeout.
+        Silence implies DENY.
     end note
 
     AwaitApproval --> Grace: approved
@@ -72,7 +73,7 @@ stateDiagram-v2
     P3 --> Verify: all applied
     P3 --> Stuck: participant unrecoverable
 
-    Stuck: 🚨 DLQ + operator runbook
+    Stuck: 🚨 SQS DLQ + operator runbook
     note right of Stuck
         NO compensation exists here.
         Forward recovery only:

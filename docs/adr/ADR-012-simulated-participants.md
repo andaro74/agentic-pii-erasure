@@ -1,8 +1,16 @@
 # ADR-012: Fictional subsystems, not real cloud services
 
-- **Status:** Accepted
+- **Status:** **Superseded by [ADR-017](ADR-017-real-aws-participants.md)**
 - **Anchors invariants:** CLAUDE.md #5 (never log raw PII), #8 (recall gates the build)
-- **Baseline:** architecture v0.1
+- **Baseline:** architecture v0.1 (kept deliberately — hermetic CI was a real benefit, and losing it is a real cost)
+
+> **Why it was superseded.** The eight archetypes exist to teach lessons that live in the
+> semantics of real services — S3 delete markers, DynamoDB GSI lag, COMPLIANCE-mode Object
+> Lock, the 7-day `kms:ScheduleKeyDeletion` floor. A simulation reproduces the behaviours its
+> author already understood and cannot surface the ones they did not.
+> [ADR-017](ADR-017-real-aws-participants.md) moves the participants onto real AWS services;
+> [ADR-020](ADR-020-deployed-eval-gate.md) records where the recall gate runs now, and what
+> giving up hermetic CI costs.
 
 ## Context
 

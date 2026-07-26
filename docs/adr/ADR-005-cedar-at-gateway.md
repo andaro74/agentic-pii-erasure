@@ -1,8 +1,17 @@
 # ADR-005: Cedar at the Gateway is the control boundary
 
-- **Status:** Accepted
+- **Status:** Accepted — **refined by [ADR-018](ADR-018-agentcore-policy.md)**
 - **Anchors invariants:** CLAUDE.md #1 (discovery has no mutating tool), #3 (approval binds to digest)
 - **Baseline:** architecture v0.1
+
+> **Refinement, not reversal.** The decision below is unchanged. What changed is that the
+> enforcement point named here is now a concrete, generally-available product —
+> **Policy in Amazon Bedrock AgentCore** — with per-identity tool-list filtering
+> (`PartiallyAuthorizeActions`) that strengthens invariant #1 from *the agent is denied* to
+> *the agent never sees the tool*. The "local engine implements a declared subset so the demo
+> runs offline" hedge below no longer applies: there is no offline demo
+> ([ADR-017](ADR-017-real-aws-participants.md)), and the in-process engine is now a fast
+> pre-check and a test surface only. See [ADR-018](ADR-018-agentcore-policy.md).
 
 ## Context
 

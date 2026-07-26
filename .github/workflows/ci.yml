@@ -1,6 +1,11 @@
 name: CI
 
-# What CI runs on every PR: quality · conformance · saga · recall gate · upgrade canary.
+# Two gates, because there is no local mode (ADR-017).
+#
+#   hermetic : lint · unit · policy · cdk synth. No AWS account, no cost. Always runs.
+#   deployed : an EPHEMERAL stack — create, seed, evaluate, DESTROY — in one job.
+#              Needs OIDC credentials, costs money, and tears down on always().
+#
 # Green from commit zero — milestone-gated make targets print "⏳ lands at Mx" and
 # exit 0 until their stage's entry file exists, then become mandatory automatically
 # (Makefile + docs/ROADMAP.md rule 4). Do not add steps that assume a later milestone.
@@ -19,17 +24,18 @@ permissions:
   contents: read
 
 jobs:
-  check:
+  # ─────────────────────────────────────────────────────────────────────────────
+  # HERMETIC — no AWS account. This is the gate every commit must leave green.
+  # ─────────────────────────────────────────────────────────────────────────────
+  hermetic:
     runs-on: ubuntu-latest
-    env:
-      PII_ERASURE_OFFLINE: "1"          # hermetic: stub model + SQLite, no AWS, no cost
     steps:
       - uses: actions/checkout@v4
 
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"        # exact-pinned deps predate 3.13/3.14 — see ADR-014
+          python-version: "3.12"        # exact-pinned deps predate 3.13/3.14 — see ADR-016
 
       - name: Cache pip
         uses: actions/cache@v4
@@ -41,19 +47,139 @@ jobs:
       - name: Install (venv + dev extras)
         run: make install
 
-      # ─── Quality gate: lint + unit + conformance + policy (Makefile `check`) ───
+      # lint + unit + policy + cdk synth. The synth-time IAM assertions live in
+      # tests/unit and cover invariants 12 and 14 — see infra/README.md.
       - name: make check
         run: make check
 
-      # ─── Milestone-gated gates. No-op until their stage lands, then enforce. ───
-      - name: Full saga (integration)
+  # ─────────────────────────────────────────────────────────────────────────────
+  # DEPLOYED — ephemeral stack. Costs money. Skipped when no OIDC role is set,
+  # which is what happens on a fork PR; ADR-020 records that as a known gap and
+  # break-glass as a LOGGED EXCEPTION, never a default.
+  # ─────────────────────────────────────────────────────────────────────────────
+  deployed:
+    needs: hermetic
+    runs-on: ubuntu-latest
+    if: vars.AWS_CI_ROLE_ARN != ''
+    permissions:
+      contents: read
+      id-token: write                   # OIDC — no long-lived keys in this repo, ever
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      PII_ERASURE_STAGE: pr-${{ github.run_id }}
+      PII_ERASURE_MODEL_ID: ${{ vars.PII_ERASURE_MODEL_ID }}
+      PII_ERASURE_DEV_OBJECT_LOCK_DAYS: "1"   # or the archive bucket cannot be torn down
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install (venv + dev extras)
+        run: make install
+
+      - name: Assume the CI role (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_CI_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Deploy the ephemeral stack
+        run: make deploy-dev
+
+      # Ground truth is emitted in the same pass that writes the data — ADR-020.
+      - name: Seed + emit ground truth
+        run: make seed
+
+      - name: Conformance — 5 verbs x 8 participants
+        run: make conformance
+
+      - name: Full three-phase saga (integration)
         run: make integration
 
       - name: Discovery recall gate (== 1.0)
         run: make eval
 
-      - name: Adversarial corpus (policy-denied, not model-resisted)
+      - name: Adversarial corpus (tool absent, or policy denied and logged)
         run: make eval-adversarial
 
-      - name: Upgrade canary (required before any langgraph bump — ADR-014)
+      # always(): a failed run must not leak resources. Since ADR-021 removed the
+      # last continuously-billing component the cost of a leak is small, but a
+      # leaked Object Lock bucket still cannot be deleted until retention expires.
+      - name: Destroy the ephemeral stack
+        if: always()
+        run: make destroy-dev
+
+  # ─────────────────────────────────────────────────────────────────────────────
+  # RELEASE GATE — only when the pinned durability packages change (ADR-016).
+  # Pause a saga, bump langgraph AND langgraph-checkpoint-aws, assert clean resume.
+  # ─────────────────────────────────────────────────────────────────────────────
+  upgrade-canary:
+    needs: hermetic
+    runs-on: ubuntu-latest
+    if: vars.AWS_CI_ROLE_ARN != ''
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      PII_ERASURE_STAGE: canary-${{ github.run_id }}
+      PII_ERASURE_MODEL_ID: ${{ vars.PII_ERASURE_MODEL_ID }}
+      PII_ERASURE_DEV_OBJECT_LOCK_DAYS: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0            # need history to diff against the true base, not just HEAD~1
+
+      - name: Did the pinned durability layer change?
+        id: pins
+        # Compare against the right base per event: a PR diffs its merge-base with
+        # the target branch; a push diffs the before-SHA. HEAD~1 alone would miss a
+        # pin bump buried in a multi-commit push — a canary that doesn't notice the
+        # bump is a gate that can't gate.
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git fetch origin "${{ github.base_ref }}" --depth=1
+            BASE="origin/${{ github.base_ref }}"
+            RANGE="$BASE...HEAD"
+          elif [ -n "${{ github.event.before }}" ] && ! echo "${{ github.event.before }}" | grep -q '^0*$'; then
+            RANGE="${{ github.event.before }}..HEAD"
+          else
+            RANGE="HEAD~1..HEAD"    # fallback: first push / workflow_dispatch
+          fi
+          if git diff --unified=0 "$RANGE" -- pyproject.toml \
+             | grep -qE '^\+.*"langgraph(-checkpoint-aws)?=='; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Pins unchanged in $RANGE — canary not required for this change."
+          fi
+
+      - uses: actions/setup-python@v5
+        if: steps.pins.outputs.changed == 'true'
+        with:
+          python-version: "3.12"
+
+      - name: Install (venv + dev extras)
+        if: steps.pins.outputs.changed == 'true'
+        run: make install
+
+      - name: Assume the CI role (OIDC)
+        if: steps.pins.outputs.changed == 'true'
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_CI_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Deploy the canary stack
+        if: steps.pins.outputs.changed == 'true'
+        run: make deploy-dev
+
+      - name: Upgrade canary — pause, bump, resume
+        if: steps.pins.outputs.changed == 'true'
         run: make upgrade-canary
+
+      - name: Destroy the canary stack
+        if: always() && steps.pins.outputs.changed == 'true'
+        run: make destroy-dev

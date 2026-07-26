@@ -4,12 +4,12 @@ build-backend = "hatchling.build"
 
 [project]
 name = "agentic-pii-erasure"
-version = "0.1.0"
-description = "Agentic, auditable, multi-system PII erasure on AWS. Agent proposes, saga disposes."
+version = "0.2.0"
+description = "Serverless, agentic, auditable multi-system PII erasure on AWS and Bedrock AgentCore. Agent proposes, saga disposes."
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
-keywords = ["gdpr", "erasure", "langgraph", "langchain", "bedrock", "mcp", "saga", "pii"]
+keywords = ["gdpr", "erasure", "bedrock", "agentcore", "langgraph", "serverless", "saga", "pii", "aws"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Programming Language :: Python :: 3.10",
@@ -18,18 +18,21 @@ classifiers = [
 ]
 
 dependencies = [
-  # ⚠️ THE DURABILITY LAYER IS PINNED, NOT RANGED (ADR-014).
+  # ⚠️ THE DURABILITY LAYER IS PINNED, NOT RANGED (ADR-016).
   # In-flight checkpoints span a 30-day grace window; a serialization change
-  # mid-window strands live erasure requests silently. Serialization lives in
-  # the checkpoint packages as much as in langgraph itself, so they move in
-  # lockstep, gated by scripts/upgrade_canary.sh. Verified on PyPI 2026-07-24.
-  # A committed lockfile (uv or pip-tools) covers the transitive layer below.
+  # mid-window strands live erasure requests silently, past a statutory
+  # deadline. Serialization lives in the checkpoint package as much as in
+  # langgraph itself, so BOTH are exact and they move in lockstep, gated by
+  # scripts/upgrade_canary.sh. Verified on PyPI 2026-07-25.
+  # ⚠️ The transitive layer is NOT yet covered: a lockfile (uv or pip-tools) is a
+  # ROADMAP M0 deliverable and must be committed before invariant #9 is fully
+  # backed — until then, only these two direct pins are protected.
   "langgraph==1.2.9",
-  "langgraph-checkpoint-sqlite==3.1.0",
+  "langgraph-checkpoint-aws==1.2.0",       # DynamoDBSaver + S3 offload. ADR-016.
   "langchain>=1.0,<2",                     # agents + middleware
   "langchain-aws>=1.0,<2",                 # ChatBedrockConverse
-  "langchain-mcp-adapters>=0.3,<1",        # MCP participants as LangChain tools
-  "mcp>=1.2",
+  "langchain-mcp-adapters>=0.3,<1",        # AgentCore Gateway MCP tools as LangChain tools
+  "mcp>=1.2",                              # MCP client for the Gateway endpoint
   "boto3>=1.34",
   "pydantic>=2.7",
   "typer>=0.12",
@@ -46,14 +49,17 @@ dev = [
   "pytest-cov>=5.0",
   "ruff>=0.5",
   "mypy>=1.10",
+  # moto is for UNIT-TESTING PARTICIPANT HANDLER LOGIC ONLY. It is never a gate:
+  # delete markers, GSI lag, Object Lock and KMS deletion windows are exactly the
+  # behaviours it does not model, and those are the ones that matter (ADR-017).
   "moto[all]>=5.0",
 ]
-# Production checkpointer. Local dev uses SQLite and does not need this.
-postgres = ["langgraph-checkpoint-postgres==3.1.0", "psycopg[binary,pool]>=3.1"]
-otel = ["opentelemetry-sdk>=1.25", "opentelemetry-exporter-otlp-proto-http>=1.25"]
-# Validates policies/cedar/*.cedar against a real Cedar engine.
-cedar = ["cedarpy>=3.2"]
+# CDK. Required for `make check`, because cdk synth and its IAM assertions are
+# hermetic gates that run on every commit — the deployment is part of the product.
 infra = ["aws-cdk-lib>=2.150", "constructs>=10.3"]
+otel = ["opentelemetry-sdk>=1.25", "opentelemetry-exporter-otlp-proto-http>=1.25"]
+# Validates policies/cedar/*.cedar against a real Cedar engine before deploy.
+cedar = ["cedarpy>=3.2"]
 
 [project.scripts]
 erasure = "pii_erasure.cli.main:app"
@@ -86,17 +92,28 @@ warn_unreachable = true
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
-module = ["langgraph.*", "langchain.*", "langchain_aws.*", "langchain_mcp_adapters.*", "mcp.*", "cedarpy.*", "aws_cdk.*"]
+module = [
+  "langgraph.*",
+  "langgraph_checkpoint_aws.*",
+  "langchain.*",
+  "langchain_aws.*",
+  "langchain_mcp_adapters.*",
+  "mcp.*",
+  "cedarpy.*",
+  "aws_cdk.*",
+  "constructs.*",
+]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 markers = [
-  "conformance: participant contract conformance suite",
-  "integration: full saga run, slower",
-  "adversarial: prompt-injection corpus",
-  "upgrade_canary: pause/resume across a framework version bump (ADR-014)",
+  "conformance: participant contract conformance suite (needs a deployed stack)",
+  "integration: full saga run (needs a deployed stack)",
+  "chaos: failure-injection suite (needs a deployed stack)",
+  "adversarial: prompt-injection corpus (needs a deployed stack)",
+  "upgrade_canary: pause/resume across a framework version bump (ADR-016)",
 ]
 addopts = "-q --strict-markers"
 

@@ -1,68 +1,79 @@
 %% ASDP · Reference Architecture (C4 container level)
-%% Four planes separated by trust boundary and by determinism.
+%% Serverless on AWS. Five planes separated by trust boundary, determinism, and IAM role.
 %% Source of truth: ARCHITECTURE.md §3. Keep in sync with it.
 flowchart TB
     subgraph HP["👤 Human Plane"]
         REQ["Requester<br/><i>DSR intake</i>"]
         APV["Approver<br/><i>Privacy Officer</i>"]
+        API["API Gateway HTTP API<br/><i>Cognito-authenticated</i>"]
     end
 
-    subgraph CP["⚙️ Control Plane — durable, deterministic"]
-        SFN["LangGraph StateGraph<br/><b>Saga</b><br/><i>ECS Fargate</i>"]
-        CKPT[("Checkpointer<br/><b>system of record</b><br/>Aurora PostgreSQL")]
-        SCH["EventBridge Scheduler<br/><i>wakes paused threads</i>"]
+    subgraph CP["⚙️ Control Plane — durable, deterministic, NO model access"]
+        EXE["saga-executor<br/><b>AWS Lambda</b><br/><i>LangGraph StateGraph</i>"]
+        CKPT[("Checkpointer<br/><b>system of record</b><br/>DynamoDB + S3 offload")]
+        SCH["EventBridge Scheduler<br/><i>one-shot → resume Lambda</i>"]
         REG[("Tombstone Registry<br/>DynamoDB")]
         LED[("Audit Ledger<br/>DynamoDB + Streams")]
         WORM[("Immutable Archive<br/>S3 Object Lock COMPLIANCE")]
+        DLQ["SQS DLQ<br/><i>phase 3 halts here</i>"]
     end
 
     subgraph RP["🧠 Reasoning Plane — bounded, read-only, replaceable"]
-        CREW["Discovery subgraph<br/><b>read-only</b><br/><i>the one place a model runs</i>"]
-        MEMX["Topology priors<br/><i>DynamoDB — never PII</i>"]
+        RT["Discovery subgraph<br/><b>AgentCore Runtime</b><br/><i>the one place a model runs</i>"]
+        BR["Amazon Bedrock<br/><i>Claude via Converse</i>"]
+        MEM[("AgentCore Memory<br/><i>topology priors — never PII</i>")]
     end
 
     subgraph PB["🛡️ Policy Enforcement Boundary"]
         GW["AgentCore Gateway<br/><i>MCP · unified tool surface</i>"]
-        POL["Cedar Policy Engine<br/><i>default-deny · forbid-wins</i>"]
+        POL["AgentCore Policy — Cedar<br/><i>default-deny · forbid-wins</i>"]
+        IDN["AgentCore Identity<br/><i>workload identities</i>"]
     end
 
-    subgraph PP["🔌 Participant Plane — 5-verb MCP contract"]
+    subgraph PP["🔌 Participant Plane — 8 Lambda targets over real AWS services"]
         A1["Cognito<br/><i>authoritative identity</i>"]
         A2["DynamoDB<br/><i>operational NoSQL</i>"]
-        A3["Aurora PostgreSQL<br/><i>relational + FK</i>"]
-        A4["S3 Uploads<br/><i>deletable blob</i>"]
+        A3["Aurora Serverless v2<br/><i>relational · Data API</i>"]
+        A4["S3 versioned<br/><i>deletable blob</i>"]
         A5["S3 Object Lock<br/><i>WORM — crypto-shred only</i>"]
-        A6["OpenSearch<br/><i>derived index</i>"]
-        A7["Glue / Athena Lake<br/><i>columnar analytics</i>"]
+        A6["S3 Vectors<br/><i>derived index · no idle cost</i>"]
+        A7["Glue / Athena Iceberg<br/><i>columnar analytics</i>"]
+        A8["SES suppression<br/><i>residual by design</i>"]
     end
 
-    KMS["AWS KMS<br/><i>per-subject envelope keys</i>"]
+    KMS["AWS KMS<br/><i>manifest signing · per-subject DEKs</i>"]
 
-    REQ -->|"1 · submit DSR"| SFN
-    SFN <-->|"checkpoint every step"| CKPT
-    SCH -->|"Command(resume)"| SFN
-    SFN -->|"2 · discovery"| CREW
-    CREW <--> MEMX
-    CREW -->|"3 · MCP tool calls"| GW
+    REQ -->|"1 · submit DSR"| API
+    API --> EXE
+    EXE <-->|"checkpoint every super-step"| CKPT
+    SCH -->|"Command(resume)"| EXE
+    EXE -->|"2 · InvokeAgentRuntime"| RT
+    RT --> BR
+    RT <--> MEM
+    RT -->|"3 · MCP tool calls"| GW
+    IDN --> GW
     GW --> POL
     POL -.->|"allow / deny · logged"| GW
-    GW --> A1 & A2 & A3 & A4 & A5 & A6 & A7
-    CREW -->|"4 · signed manifest"| SFN
-    SFN -->|"5 · interrupt() + approval request"| APV
-    APV -->|"6 · Command(resume=…)"| SFN
-    SFN -->|"7 · executor role only"| GW
-    A5 -.->|"key destruction"| KMS
-    SFN --> REG
-    SFN --> LED
-    LED -->|"stream export"| WORM
+    GW --> A1 & A2 & A3 & A4 & A5 & A6 & A7 & A8
+    RT -->|"4 · candidate manifest"| EXE
+    EXE -->|"5 · interrupt() + approval request"| API
+    APV --> API
+    API -->|"6 · Command(resume=…)"| EXE
+    EXE -->|"7 · executor identity only"| GW
+    EXE --> KMS
+    A5 -.->|"DEK destruction"| KMS
+    EXE --> REG
+    EXE --> LED
+    EXE -.->|"phase 3 failure"| DLQ
+    LED -->|"Streams → Firehose"| WORM
 
     classDef human fill:#fff4e6,stroke:#d97706,color:#000
     classDef control fill:#e6f0ff,stroke:#1d4ed8,color:#000
     classDef reason fill:#f3e8ff,stroke:#7c3aed,color:#000
     classDef policy fill:#fee2e2,stroke:#dc2626,color:#000
     classDef part fill:#ecfdf5,stroke:#059669,color:#000
-    class REQ,APV human
-    class SFN,REG,LED,WORM,CKPT,SCH control
-    class CREW,MEMX reason
-    class GW,POL policy
-    class A1,A2,A3,A4,A5,A6,A7,KMS part
+    class REQ,APV,API human
+    class EXE,REG,LED,WORM,CKPT,SCH,DLQ control
+    class RT,BR,MEM reason
+    class GW,POL,IDN policy
+    class A1,A2,A3,A4,A5,A6,A7,A8,KMS part

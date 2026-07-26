@@ -1,36 +1,41 @@
 %% ASDP · Human approval with digest-bound tokens (closes the TOCTOU hole).
-%% LangGraph interrupt/resume — the process exits while paused. ADR-014.
-%% Source of truth: ARCHITECTURE.md §8.2. See ADR-006.
+%% Serverless: the Lambda RETURNS while paused; the checkpoint is the pause. ADR-016.
+%% Source of truth: ARCHITECTURE.md §8.2. See ADR-006, ADR-018.
 sequenceDiagram
     autonumber
-    participant SFN as LangGraph saga
-    participant GW as Gateway + Cedar
-    participant APV as Approver
-    participant EX as Executor Role
-    participant P as Participants
+    participant EXE as saga-executor (Lambda)
+    participant DDB as Checkpoints (DynamoDB)
+    participant SCH as EventBridge Scheduler
+    participant APV as Approver (via HTTP API)
+    participant GW as Gateway + AgentCore Policy
+    participant P as Participant Lambdas
 
-    Note over SFN: Phase 2 complete, manifest signed
-    SFN->>SFN: digest = sha256(canonical(manifest))
-    SFN->>APV: interrupt() — approval request + digest
-    Note over SFN,APV: state checkpointed, process EXITS<br/>EventBridge Scheduler holds the timeout<br/>silence implies DENY
+    Note over EXE: Phase 2 complete, manifest KMS-signed
+    EXE->>EXE: digest = sha256(canonical(manifest))
+    EXE->>DDB: interrupt() — checkpoint written
+    EXE->>SCH: schedule approval timeout
+    Note over EXE: Lambda RETURNS. No compute is held.<br/>Silence implies DENY.
 
     APV->>APV: review blast radius, holds, residual risk
-    APV->>SFN: Command(resume={decision, digest})
-    SFN->>SFN: assert returned digest == signed digest
-    Note over SFN: mismatch implies abort — re-approval required
+    APV->>EXE: POST /approvals — Command(resume={decision, digest})
+    EXE->>DDB: load checkpoint
+    EXE->>EXE: assert returned digest == signed digest
+    Note over EXE: mismatch implies abort — re-approval required
 
-    SFN->>SFN: mint approval token bound to digest
-    Note over SFN: ⏳ grace window, then re-check legal holds
+    EXE->>EXE: mint approval token bound to digest
+    EXE->>SCH: schedule grace-window wake
+    Note over EXE: ⏳ Lambda returns again. Days pass.
 
-    SFN->>EX: resume from checkpoint, assume executor role
-    EX->>GW: subject.hard_delete(manifestDigest, approvalToken)
+    SCH->>EXE: resume — re-check legal holds
+    EXE->>GW: subject.hard_delete(manifestDigest, approvalToken)
     GW->>GW: Cedar: principal==executor AND<br/>token.digest==manifestDigest AND<br/>graceElapsed AND holds==0 AND subjectCount==1
     alt policy allows
-        GW->>P: invoke
+        GW->>P: invoke Lambda target
+        P->>P: re-validate digest + token (defence in depth)
         P-->>GW: APPLIED + receipt digest
-        GW-->>EX: receipt
-        EX->>SFN: record in audit ledger
+        GW-->>EXE: receipt
+        EXE->>DDB: checkpoint + ledger append
     else policy denies
-        GW-->>EX: DENY (logged to CloudWatch)
-        Note over EX: saga halts — no retry loop on authz failure
+        GW-->>EXE: DENY (logged to CloudWatch + ledger)
+        Note over EXE: saga halts — no retry loop on authz failure
     end

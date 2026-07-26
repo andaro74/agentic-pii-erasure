@@ -1,8 +1,18 @@
 # ADR-014: LangGraph checkpointers own durability
 
-- **Status:** Accepted (supersedes [ADR-003](ADR-003-step-functions-owns-durability.md))
-- **Anchors invariants:** CLAUDE.md #9 (never widen the langgraph version constraint), #11 (resume handlers must be idempotent)
+- **Status:** **Superseded by [ADR-016](ADR-016-serverless-durability.md)** (supersedes [ADR-003](ADR-003-step-functions-owns-durability.md))
+- **Anchors invariants:** CLAUDE.md #9 (never widen the pinned durability constraint), #11 (resume handlers must be idempotent)
 - **Baseline:** architecture v0.1
+
+> **What survived and what did not.** The core principle — *the checkpointer is the system of
+> record, not a cache* — is unchanged and is restated verbatim in
+> [ADR-016](ADR-016-serverless-durability.md). What was superseded is the storage and compute:
+> Aurora PostgreSQL Serverless v2 plus an always-on ECS Fargate service is the least serverless
+> part of an otherwise serverless architecture, dragging a VPC and idle cost into a workload
+> that is parked for weeks at a time. ADR-016 moves checkpoints to DynamoDB
+> (`langgraph-checkpoint-aws`) and [ADR-015](ADR-015-serverless-compute-split.md) splits the
+> compute between AgentCore Runtime and Lambda. The DynamoDB checkpointer this ADR rejected
+> below is the one ADR-016 chose — read that reversal, and its cost, there.
 
 ## Context
 

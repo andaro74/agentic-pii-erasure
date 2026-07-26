@@ -11,17 +11,23 @@ RUFF := $(VENV_BIN)/ruff
 MYPY := $(VENV_BIN)/mypy
 PYTEST := $(VENV_BIN)/pytest
 
-# src and tests exist from commit zero; evals and seeds land at M4/M7. Lint only
-# the dirs that exist so `make check` is green at commit zero, and pick them up
-# automatically the moment they appear — same "becomes mandatory when it lands"
-# rule the milestone gates use (docs/ROADMAP.md, rule 4). Not a silencing guard.
-LINT_DIRS := src tests $(wildcard evals seeds)
+# src and tests exist from commit zero; infra lands at M0, evals and seeds at
+# M4/M7. Lint only the dirs that exist so `make check` is green at commit zero,
+# and pick them up automatically the moment they appear — the same "becomes
+# mandatory when it lands" rule the milestone gates use (docs/ROADMAP.md, rule 4).
+# Not a silencing guard.
+LINT_DIRS := src tests $(wildcard infra evals seeds)
 
 # Milestone-gated targets: stages that haven't been built yet print "⏳ lands
 # at Mx" instead of failing, so `make check` and CI are green from commit zero.
 # The guard is the *existence of the stage's entry file* — the moment a
 # milestone lands, its gate becomes mandatory automatically. Never re-add a
 # guard to silence a failing gate (docs/ROADMAP.md, rule 4).
+#
+# TWO KINDS OF GATE (docs/ROADMAP.md). There is no local mode — ADR-017.
+#   HERMETIC : lint, test, policy-test, synth. No AWS account. This is `make check`.
+#   DEPLOYED : conformance, integration, eval, chaos, walkthrough. Needs a
+#              deployed stack, costs money, and is run by a human.
 
 .PHONY: help
 help: ## Show this help
@@ -32,49 +38,11 @@ help: ## Show this help
 install: ## Create venv and install with dev extras
 	python3 -m venv .venv
 	$(PIP) install -U pip
-	$(PIP) install -e ".[dev,otel]"
+	$(PIP) install -e ".[dev,infra,otel]"
 	@test -f .env || cp .env.example .env
 	@echo "✅ next: make check · then open docs/ROADMAP.md"
 
-# ─── Fake data (M4) ───────────────────────────────────────────────────────────
-.PHONY: seed
-seed: ## Seed the 8 fake subsystems with made-up subjects
-	$(PY) -m pii_erasure.cli.main seed --tenant meridian
-
-.PHONY: reset
-reset: ## Wipe all local state and reseed
-	rm -rf .state && $(MAKE) seed
-
-# ─── Running ──────────────────────────────────────────────────────────────────
-.PHONY: demo
-demo: ## Full walkthrough with real Bedrock discovery (needs AWS credentials) (M10)
-	PII_ERASURE_OFFLINE=0 $(PY) -m pii_erasure.cli.main demo
-
-.PHONY: demo-offline
-demo-offline: ## Same walkthrough, stub model + SQLite. No AWS, no cost. (M8)
-	PII_ERASURE_OFFLINE=1 $(PY) -m pii_erasure.cli.main demo
-
-.PHONY: discover
-discover: ## Discover one subject. Usage: make discover SUBJECT=sub_7f3a (M7)
-	$(PY) -m pii_erasure.cli.main discover --subject $(SUBJECT)
-
-.PHONY: inspect
-inspect: ## Dump a participant's raw fake data. Usage: make inspect P=aegis-archive (M4)
-	$(PY) -m pii_erasure.cli.main inspect --participant $(P)
-
-.PHONY: threads
-threads: ## List LangGraph checkpoint threads and their paused state (M8)
-	$(PY) -m pii_erasure.cli.main threads --list
-
-.PHONY: resume
-resume: ## Resume a paused saga. Usage: make resume THREAD=saga_01JQ8 DECISION=approve (M8)
-	$(PY) -m pii_erasure.cli.main resume --thread $(THREAD) --decision $(DECISION)
-
-.PHONY: ledger
-ledger: ## Print the hash-chained audit ledger and verify the chain (M5)
-	$(PY) -m pii_erasure.cli.main ledger --verify
-
-# ─── Quality ──────────────────────────────────────────────────────────────────
+# ─── Quality — HERMETIC, no AWS account ───────────────────────────────────────
 .PHONY: lint
 lint: ## ruff + mypy
 	$(RUFF) check $(LINT_DIRS)
@@ -87,28 +55,101 @@ fmt: ## Autoformat
 	$(RUFF) check --fix $(LINT_DIRS)
 
 .PHONY: test
-test: ## Unit tests
+test: ## Unit tests — contract, reducers, handler logic (moto), CDK IAM assertions
 	$(PYTEST) tests/unit
 
+.PHONY: policy-test
+policy-test: ## Cedar policy tests + engine/Cedar divergence test (M6)
+	@if [ -f tests/unit/test_policies.py ]; then \
+		$(PYTEST) tests/unit/test_policies.py; \
+	else echo "⏳ lands at M6 — docs/ROADMAP.md"; fi
+
+.PHONY: synth
+synth: ## CDK synth. Free, no credentials. IAM assertions live in tests/unit. (M0)
+	@if [ -f infra/app.py ]; then \
+		cd infra && npx -y aws-cdk@2 synth --quiet; \
+	else echo "⏳ lands at M0 — docs/ROADMAP.md"; fi
+
+.PHONY: check
+check: lint test policy-test synth ## What CI runs on every commit. HERMETIC — no AWS account.
+
+# ─── Deployment — HUMAN-ONLY, costs money ─────────────────────────────────────
+# Denied to Claude Code in .claude/settings.json. Read infra/README.md first.
+# Nothing in the stack bills a continuous floor (ADR-021), so an idle dev stack
+# is cheap — but an Object Lock bucket with a long retention period cannot be
+# torn down by anyone, including root, until that retention expires.
+#
+# STAGE names the stack instance. It defaults to "dev" for humans; CI overrides
+# it per run (STAGE=pr-<run_id>) so ephemeral eval stacks are actually ephemeral
+# — with a shared hardcoded stage, two concurrent PRs would deploy into and then
+# destroy each other's "ephemeral" stack.
+STAGE ?= $(or $(PII_ERASURE_STAGE),dev)
+
+.PHONY: deploy-dev
+deploy-dev: ## ⚠️ Deploy a dev-shaped stack (STAGE=dev by default). Costs money.
+	cd infra && npx -y aws-cdk@2 deploy --all --context stage=$(STAGE)
+
+.PHONY: deploy
+deploy: ## ⚠️ Deploy the production-shaped stack. Human-only. (M10)
+	cd infra && npx -y aws-cdk@2 deploy --all --context stage=prod
+
+.PHONY: destroy-dev
+destroy-dev: ## ⚠️ Tear down the STAGE stack. Do this when you are done.
+	cd infra && npx -y aws-cdk@2 destroy --all --context stage=$(STAGE)
+
+# ─── Data — DEPLOYED ──────────────────────────────────────────────────────────
+.PHONY: seed
+seed: ## Write fabricated subjects into the deployed participants (M4)
+	$(PY) -m pii_erasure.cli.main seed --tenant meridian
+
+.PHONY: inspect
+inspect: ## Dump one participant's state. Usage: make inspect P=compliance-archive (M4)
+	$(PY) -m pii_erasure.cli.main inspect --participant $(P)
+
+# ─── Running — DEPLOYED ───────────────────────────────────────────────────────
+.PHONY: walkthrough
+walkthrough: ## Full arc against the dev stack: discover → soft → pause → hard → cert (M8)
+	$(PY) -m pii_erasure.cli.main walkthrough
+
+.PHONY: discover
+discover: ## Discover one subject. Usage: make discover SUBJECT=sub_7f3a (M7)
+	$(PY) -m pii_erasure.cli.main discover --subject $(SUBJECT)
+
+.PHONY: threads
+threads: ## List checkpoint threads and their paused state — nothing is running (M8)
+	$(PY) -m pii_erasure.cli.main threads --list
+
+.PHONY: approve
+approve: ## Approve or deny. Usage: make approve THREAD=saga_01JQ8 DECISION=approve (M8)
+	$(PY) -m pii_erasure.cli.main approve --thread $(THREAD) --decision $(DECISION)
+
+.PHONY: resume
+resume: ## Manually resume a paused saga. Usage: make resume THREAD=saga_01JQ8 (M8)
+	$(PY) -m pii_erasure.cli.main resume --thread $(THREAD)
+
+.PHONY: ledger
+ledger: ## Print the hash-chained audit ledger and verify the chain (M5)
+	$(PY) -m pii_erasure.cli.main ledger --verify
+
+# ─── Gates — DEPLOYED ─────────────────────────────────────────────────────────
 .PHONY: conformance
-conformance: ## Every participant must pass the 5-verb contract suite (M2)
+conformance: ## 5 verbs x 8 participants, against the deployed stack (M2)
 	@if ls tests/conformance/test_*.py >/dev/null 2>&1; then \
 		$(PYTEST) tests/conformance -m conformance; \
 	else echo "⏳ lands at M2 — docs/ROADMAP.md"; fi
 
 .PHONY: integration
-integration: ## Full saga, all phases, against the fake subsystems (M5)
+integration: ## Full three-phase saga against the deployed stack (M5)
 	@if ls tests/integration/test_*.py >/dev/null 2>&1; then \
 		$(PYTEST) tests/integration -m integration; \
 	else echo "⏳ lands at M5 — docs/ROADMAP.md"; fi
 
-.PHONY: policy-test
-policy-test: ## Cedar policy unit tests (M6)
-	@if [ -f tests/unit/test_policies.py ]; then \
-		$(PYTEST) tests/unit/test_policies.py; \
-	else echo "⏳ lands at M6 — docs/ROADMAP.md"; fi
+.PHONY: chaos
+chaos: ## Participant failures, duplicate wakes, resurrection at T+7 (M9)
+	@if ls tests/integration/test_chaos*.py >/dev/null 2>&1; then \
+		$(PYTEST) tests/integration -m chaos; \
+	else echo "⏳ lands at M9 — docs/ROADMAP.md"; fi
 
-# ─── Evaluation ───────────────────────────────────────────────────────────────
 .PHONY: eval
 eval: ## Discovery recall vs generated ground truth. Gate: recall == 1.0 (M7)
 	@if [ -f evals/run.py ]; then \
@@ -116,31 +157,19 @@ eval: ## Discovery recall vs generated ground truth. Gate: recall == 1.0 (M7)
 	else echo "⏳ lands at M7 — docs/ROADMAP.md"; fi
 
 .PHONY: eval-adversarial
-eval-adversarial: ## Injection corpus. Pass = policy denied, not model resisted. (M7)
+eval-adversarial: ## Injection corpus. Pass = tool absent or policy denied. (M7)
 	@if [ -f evals/run.py ]; then \
 		$(PY) -m evals.run --suite adversarial; \
 	else echo "⏳ lands at M7 — docs/ROADMAP.md"; fi
 
-# ─── Release gates (ADR-014) ──────────────────────────────────────────────────
+# ─── Release gates (ADR-016) ──────────────────────────────────────────────────
 .PHONY: upgrade-canary
-upgrade-canary: ## REQUIRED before any langgraph bump. Pause, upgrade, resume. (M9)
+upgrade-canary: ## REQUIRED before bumping langgraph OR langgraph-checkpoint-aws (M9)
 	@if [ -f tests/integration/test_upgrade_canary.py ]; then \
 		bash scripts/upgrade_canary.sh; \
 	else echo "⏳ lands at M9 — docs/ROADMAP.md"; fi
 
-# ─── Infrastructure (M10, optional) ───────────────────────────────────────────
-.PHONY: synth
-synth: ## CDK synth: Aurora checkpointer, Fargate, EventBridge Scheduler
-	cd infra && npx -y aws-cdk@2 synth
-
-.PHONY: deploy
-deploy: ## Deploy to AWS. Costs money. Human-only — read infra/README.md first.
-	cd infra && npx -y aws-cdk@2 deploy --all
-
-# ─── Everything ───────────────────────────────────────────────────────────────
-.PHONY: check
-check: lint test conformance policy-test ## What CI runs on every PR
-
+# ─── Misc ─────────────────────────────────────────────────────────────────────
 .PHONY: diagrams
 diagrams: ## Render docs/diagrams/*.mermaid to SVG
 	@mkdir -p docs/diagrams/out
@@ -150,5 +179,5 @@ diagrams: ## Render docs/diagrams/*.mermaid to SVG
 
 .PHONY: clean
 clean: ## Remove caches and build artefacts
-	rm -rf .pytest_cache .ruff_cache .mypy_cache dist build .coverage htmlcov
+	rm -rf .pytest_cache .ruff_cache .mypy_cache dist build .coverage htmlcov cdk.out
 	find . -name __pycache__ -type d -prune -exec rm -rf {} +
