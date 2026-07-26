@@ -221,8 +221,15 @@ def test_the_declared_snapshot_window_matches_the_participant(participants: Temp
     import stacks.participants as infra_stack
 
     from pii_erasure.participants.analytics_lake import handler as lake
+    from pii_erasure.participants.analytics_lake import schema as lake_schema
 
     assert infra_stack.SNAPSHOT_RETENTION_DAYS == lake.SNAPSHOT_RETENTION_DAYS
+    # And the table property that actually enforces it, so the disclosed window is real
+    # rather than a number the participant states and nothing honours.
+    assert lake_schema.SNAPSHOT_RETENTION_SECONDS == lake.SNAPSHOT_RETENTION_DAYS * 86400
+    ddl = lake_schema.create_table_sql(database="d", table="t", location="s3://b/")
+    assert f"'{lake_schema.SNAPSHOT_RETENTION_SECONDS}'" in ddl
+    assert "'table_type' = 'ICEBERG'" in ddl
 
 
 # ─── the gateway ──────────────────────────────────────────────────────────────────────

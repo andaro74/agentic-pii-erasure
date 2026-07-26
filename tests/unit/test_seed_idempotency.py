@@ -209,6 +209,7 @@ def rig() -> tuple[FixtureGenerator, dict[str, Any]]:
         "archiveBucket": "archive",
         "dekRegistryTable": "deks",
         "analyticsTable": "events",
+        "analyticsBucket": "lakebucket",
         "analyticsDatabase": "lake",
         "athenaWorkgroup": "wg",
         "contactList": "meridian",

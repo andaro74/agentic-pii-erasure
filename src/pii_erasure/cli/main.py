@@ -223,6 +223,7 @@ def _stack_config(tenant_id: str) -> dict[str, str]:
         "dekRegistryTable": outputs["DekRegistryTable"],
         "vectorBucket": outputs["VectorBucketName"],
         "vectorIndex": outputs["VectorIndexName"],
+        "analyticsBucket": outputs["AnalyticsBucketName"],
         "analyticsDatabase": outputs["AnalyticsDatabaseName"],
         "analyticsTable": outputs["AnalyticsTableName"],
         "athenaWorkgroup": outputs["AthenaWorkgroupName"],

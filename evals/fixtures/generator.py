@@ -55,7 +55,9 @@ from typing import Any
 
 from botocore.exceptions import ClientError
 
+from pii_erasure.participants.analytics_lake.schema import ensure_table
 from pii_erasure.participants.billing_ledger.handler import execute_with_resume
+from pii_erasure.participants.billing_ledger.schema import ensure_schema
 from pii_erasure.participants.notify_suppression.handler import subject_address
 from pii_erasure.participants.vector_index.handler import VECTOR_DIMENSION, vector_key
 
@@ -144,6 +146,8 @@ class FixtureGenerator:
     def __init__(self, *, clients: dict[str, Any], config: dict[str, str]) -> None:
         self._clients = clients
         self._config = config
+        self._schema_applied = False
+        self._table_applied = False
 
     # ── the pass ─────────────────────────────────────────────────────────────────────
 
@@ -235,6 +239,17 @@ class FixtureGenerator:
         return {"items": count}
 
     def _write_billing(self, subject: dict[str, Any], expected: dict[str, int]) -> dict[str, int]:
+        # Applied on first use rather than at construction: a run with no billing subject
+        # should not need a reachable cluster, and the DDL is idempotent so once is enough.
+        if not self._schema_applied:
+            ensure_schema(
+                self._clients["rds-data"],
+                cluster_arn=self._config["billingClusterArn"],
+                secret_arn=self._config["billingSecretArn"],
+                database=self._config["billingDatabase"],
+            )
+            self._schema_applied = True
+
         written = {
             "customers": expected.get("customers", 0),
             "invoices": expected.get("invoices", 0),
@@ -368,6 +383,16 @@ class FixtureGenerator:
 
     def _write_analytics(self, subject: dict[str, Any], expected: dict[str, int]) -> dict[str, int]:
         rows = expected.get("rows", 0)
+        if rows and not self._table_applied:
+            # Iceberg, or UPDATE and DELETE are unavailable and three of the five verbs
+            # become impossible while discover and verify keep working (V8-9).
+            ensure_table(
+                self._athena,
+                database=self._config["analyticsDatabase"],
+                table=self._config["analyticsTable"],
+                location=f"s3://{self._config['analyticsBucket']}/events/",
+            )
+            self._table_applied = True
         if rows:
             # A multi-row INSERT ... VALUES cannot be parameterised, so the handle is
             # validated against the pseudonymous-reference shape before it is interpolated.

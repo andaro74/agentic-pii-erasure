@@ -220,3 +220,29 @@ def test_every_stack_output_the_seeder_reads_actually_exists() -> None:
 
     missing = read_keys - available
     assert not missing, f"the seeder reads stack outputs that are never exported: {missing}"
+
+
+def test_every_config_key_the_generator_reads_is_supplied_by_the_cli() -> None:
+    """`_stack_config()` builds the dict the generator indexes into.
+
+    They are written in different files and joined only at runtime, so a key added to one
+    and not the other is a `KeyError` during `make seed` — against a deployed stack, with a
+    human waiting. Same shape as the stack-output check above, one layer in.
+    """
+    generator_src = (REPO / "evals" / "fixtures" / "generator.py").read_text(encoding="utf-8")
+    cli_src = (REPO / "src" / "pii_erasure" / "cli" / "main.py").read_text(encoding="utf-8")
+
+    # Both quote styles. The first version matched only double quotes and silently missed
+    # `self._config['analyticsBucket']` — single-quoted because it sits inside an f-string.
+    # A guard that reads 15 of 16 keys reports success while ignoring the newest one, which
+    # is the failure mode it was written to prevent, one level up.
+    read = set(re.findall(r"""_config\[["']([a-zA-Z]+)["']\]""", generator_src))
+    assert read, "the extraction found nothing — this test would pass vacuously"
+    assert len(read) >= 16, (
+        f"only {len(read)} config keys extracted; the generator uses more than that, so "
+        "the pattern has stopped seeing some of them"
+    )
+
+    supplied = set(re.findall(r'^\s*"([a-zA-Z]+)":', cli_src, re.MULTILINE))
+    missing = sorted(read - supplied)
+    assert not missing, f"the generator reads config keys the CLI never supplies: {missing}"

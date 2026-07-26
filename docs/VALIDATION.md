@@ -556,6 +556,54 @@ Both were caught by the tests failing in ways the described defect could not exp
 is the same signal that found the wrong-reason probe in V7-1. **"Red for a reason I cannot
 account for" is worth as much attention as red itself.**
 
+### 2026-07-26 · V8-9 — the relational participant had no schema
+
+`make seed` failed with `relation "public.customers" does not exist`.
+
+| ID | Severity | Finding | Resolution |
+|---|---|---|---|
+| V8-9 | **High** | **Nothing ever created the billing ledger's tables.** `handler.py` names `public.customers`, `public.invoices`, `public.invoice_lines` and `public.legal_holds` in fixed statements; the stack creates a cluster and a database and stops there. Every unit test passed because the Data API client was faked — a fake answers the question it was given and has no opinion about whether the table exists. The participant, the conformance suite and the saga would all have failed the same way. | **Fixed.** `billing_ledger/schema.py` holds the DDL beside the SQL that depends on it, applied idempotently by the generator on first use. Backed by `tests/unit/test_billing_schema.py`: every table and column the handler names must exist in the schema, delete order must be the reverse of create order, and the foreign keys must be `RESTRICT`. |
+
+**The DDL lives in `src/`, not `infra/`.** CloudFormation cannot create a table inside a
+database; doing it "in the stack" would mean a custom resource that runs this same SQL.
+Keeping it beside the queries means table names, column names and delete ordering are one
+file apart and comparable by a unit test, which is what closes the gap for good.
+
+**`ON DELETE RESTRICT`, and it is load-bearing.** `CASCADE` would make
+`DELETE FROM public.customers` silently remove the invoices and lines too. It would *work* —
+and it would delete the entire point of the RELATIONAL archetype, because referential
+integrity would no longer dictate anything, `_DELETE_ORDER` would become decorative, and a
+reader would take away the opposite of the intended lesson. RESTRICT makes the database
+refuse a wrong-order delete, which is what makes the ordering demonstrable rather than
+asserted. There is now a test that fails if anyone "fixes" the constraint.
+
+**Why no fake could have caught this.** The unit tests inject a fake Data API client, and a
+fake has no schema — it answers whatever it is asked. That is not a flaw in the fakes; it
+is the boundary of what a fake can tell you, and the reason ADR-017 makes the deployed gate
+the real one. The generalisable form: **a test double can verify the shape of a call, never
+the existence of the thing it addresses.** Every participant reaching a store with structure
+— tables, indexes, a vector index, a Glue table — needs that structure created somewhere,
+and the hermetic gate can only check that the two definitions agree, never that either is
+real.
+
+**The same gap existed one participant along, and was closed in the same commit.**
+`analytics-lake` queried a Glue table nothing created; it had not failed only because
+`make seed` stops at Aurora first. `analytics_lake/schema.py` now creates it as **Iceberg** —
+required, not stylistic: `UPDATE` and `DELETE` are unavailable on a plain external table, so
+three of the five verbs would have been impossible while `discover` and `verify` kept
+working, leaving the participant looking half-alive rather than broken. The table's
+`vacuum_max_snapshot_age_seconds` is derived from the same constant the participant
+discloses in its `PARTIAL` residual, and a test asserts they agree — a retention window an
+approver is shown must be one the table actually honours.
+
+**A postscript on the guard itself.** The new check extracts the config keys the generator
+reads and compares them with what the CLI supplies. Its first version matched only
+double-quoted subscripts and silently missed `self._config['analyticsBucket']` — single-quoted
+because it sits inside an f-string. It read 15 of 16 keys and reported success, ignoring the
+newest one: precisely the failure it was written to prevent, one level up. Caught by
+mutation-testing it and noticing the mutation produced *no* failure. **When a mutation
+changes nothing, check that the mutation applied before concluding the code is fine.**
+
 1. Read a doc claim as an adversary: *what would make this false, and could the
    named control detect it?*
 2. If the control can't go red, that's a finding — record it here with the fix and
