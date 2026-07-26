@@ -176,6 +176,28 @@ V3-1 is the pass's teaching example: it was introduced *in this same session* th
 "a gate that couldn't gate" into the log twice. The defect class does not care who wrote
 the control or how recently the author re-read the definition.
 
+### 2026-07-26 · First-run pass — walking `infra/README.md` as a new user (post-M0)
+
+Not a document review. The human ran the documented path on a clean machine and hit a wall
+the docs did not mention, which is a category of defect no amount of re-reading finds: the
+docs were internally consistent and still could not be followed.
+
+| ID | Severity | Finding | Resolution |
+|---|---|---|---|
+| V4-1 | **High** | **A setting with no mechanism:** `.env.example` documented `AWS_REGION` under a heading claiming the file "configures the CLI and the deploy", and nothing read it. `make` does not source `.env`, and the stacks are environment-agnostic by design, so the CDK CLI resolved the region from **ambient credentials**. A user setting `eu-west-1` in `.env` with `us-east-1` in their profile deploys to `us-east-1` — a regional stack in a region they did not choose, where AgentCore or their Bedrock model may not exist, surfacing as a discovery failure at M7 rather than as a deploy error. The docs' own region prerequisites were unenforceable. | **Fixed.** `bootstrap`/`deploy-dev`/`deploy`/`destroy-dev` source `.env` explicitly and **fail loudly** on an unset region rather than falling back. An exported shell variable wins over the file, so CI keeps supplying `AWS_REGION` and a per-run `PII_ERASURE_STAGE` — sourcing blindly would have resurrected V3-1, because `make install` writes a `.env` from the example. `make synth` deliberately does not load it: it is part of the hermetic gate and must stay credential-free. Backed by `tests/unit/test_makefile_env.py`, which asserts the wiring on every AWS-touching target and *executes* the fragment to prove the precedence. |
+| V4-2 | Medium | **A prerequisite documented nowhere:** `cdk bootstrap` appeared in no `.md` in the repo and had no `make` target. The documented first run — prerequisites → `make deploy-dev` — cannot work on a fresh account. | **Fixed.** `make bootstrap` (human-only, denied in `.claude/settings.json`) resolves the account from STS and the region from `.env`; `infra/README.md` gains a numbered first-run table naming, for each step, *the symptom you get by skipping it*, because none of them fail where the mistake was made. |
+| V4-3 | Low | **An inconsistency that only bites off the happy path:** `deploy-dev`/`deploy`/`destroy-dev` relied on `cdk.json`'s `app: python app.py`, so from a shell without the venv activated they fail with `ModuleNotFoundError: aws_cdk` — the exact footgun `make synth` already avoided by passing the venv interpreter explicitly. | **Fixed.** All CDK targets now pass `--app '$(CDK_APP)'`, and the pinned CLI version lives in one `$(CDK)` variable instead of five copies. |
+
+**The fix's own first attempt was the same defect class again.** Shell precedence was first
+implemented as `eval "$(export -p)"` — snapshot the environment, restore it after sourcing.
+It reads as more general and it is broken on Windows, where environment variables named
+`ProgramFiles(x86)` are not valid shell identifiers and the `eval` fails, silently leaving
+`.env` in charge. The behavioural test caught it on the machine it was written on, before
+it reached a deploy. Precedence is now applied to the two variables by name.
+
+Both guards were **mutation-tested**: with `LOAD_ENV` replaced by a naive `. ./.env`, the two
+precedence cases go red. A guard nobody has watched fail is a guard nobody has tested.
+
 1. Read a doc claim as an adversary: *what would make this false, and could the
    named control detect it?*
 2. If the control can't go red, that's a finding — record it here with the fix and

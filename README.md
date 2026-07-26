@@ -145,15 +145,18 @@ Adding participant #9 means writing one Lambda, registering one Gateway target, 
 
 ## Quick start
 
-Requires Python 3.10+, an AWS account, credentials with permission to create the stack, and Bedrock model access enabled in your region.
+Requires Python 3.10+, Node (for the CDK CLI), an AWS account, credentials the AWS CLI can use, and Bedrock model access enabled in your region.
 
 ```bash
 git clone https://github.com/YOUR-ORG/agentic-pii-erasure
 cd agentic-pii-erasure
 
 make install        # venv + dependencies + .env
+# → edit .env: AWS_REGION and PII_ERASURE_MODEL_ID. Both are required, and the
+#   deploy targets fail loudly rather than guessing. infra/README.md explains why.
 make check          # lint, unit, policy, cdk synth — no AWS account needed
 
+make bootstrap      # ⚠️ once per account + region — creates the CDK toolkit stack
 make deploy-dev     # ⚠️ creates real infrastructure and costs real money
 make seed           # write fabricated subjects into the deployed services
 make walkthrough    # the full arc, end to end

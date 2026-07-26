@@ -81,10 +81,36 @@ policy-test: ## Cedar policy tests + engine/Cedar divergence test (M6)
 # passes the venv interpreter explicitly so synth works from a bare shell.
 CDK_APP := "$(abspath $(VENV_BIN)/python)" app.py
 
+# The CDK CLI is pinned: an older cached CLI cannot read the cloud-assembly
+# schema emitted by the pinned aws-cdk-lib, and npx will happily serve one.
+CDK := npx -y aws-cdk@2.1133.0
+
+# ─── .env is authoritative for the AWS-touching targets ───────────────────────
+# make does not read .env, so every variable in it used to be inert: a user
+# could set AWS_REGION=eu-west-1 there and deploy to whatever their profile
+# said, because the stacks are environment-agnostic and the CDK CLI resolves
+# the region from ambient credentials. A setting that describes an intention
+# without a mechanism is the defect class docs/VALIDATION.md exists to catch.
+#
+# Shell-set variables WIN over .env, deliberately: CI passes AWS_REGION and
+# PII_ERASURE_STAGE as job env, and `make install` writes a .env from the
+# example — sourcing blindly would resurrect V3-1 (two concurrent PRs
+# destroying each other's "ephemeral" stack).
+#
+# `make synth` does NOT load it. Synth needs no region and no credentials, and
+# it must stay that way — it is part of the hermetic gate.
+# `tr -d '\r'` because a .env edited on Windows carries CRLF, and a region of
+# "us-west-2\r" is a region that does not exist. Precedence is applied to the two
+# variables CI actually overrides, by name — snapshotting the whole environment
+# with `eval "$$(export -p)"` looks more general but breaks on Windows, where
+# names like ProgramFiles(x86) are not valid shell identifiers.
+LOAD_ENV = if [ -f .env ]; then _r="$$AWS_REGION"; _s="$$PII_ERASURE_STAGE"; set -a; . <(tr -d '\r' < .env); set +a; export AWS_REGION="$${_r:-$$AWS_REGION}" PII_ERASURE_STAGE="$${_s:-$$PII_ERASURE_STAGE}"; fi
+REQUIRE_REGION = : $${AWS_REGION:?is unset — set it in .env (see .env.example) or export it}
+
 .PHONY: synth
 synth: ## CDK synth. Free, no credentials. IAM assertions live in tests/unit. (M0)
 	@if [ -f infra/app.py ]; then \
-		cd infra && npx -y aws-cdk@2.1133.0 synth --quiet --app '$(CDK_APP)'; \
+		cd infra && $(CDK) synth --quiet --app '$(CDK_APP)'; \
 	else echo "⏳ lands at M0 — docs/ROADMAP.md"; fi
 
 .PHONY: check
@@ -96,23 +122,46 @@ check: lint test policy-test synth ## What CI runs on every commit. HERMETIC —
 # is cheap — but an Object Lock bucket with a long retention period cannot be
 # torn down by anyone, including root, until that retention expires.
 #
-# STAGE names the stack instance. It defaults to "dev" for humans; CI overrides
-# it per run (STAGE=pr-<run_id>) so ephemeral eval stacks are actually ephemeral
-# — with a shared hardcoded stage, two concurrent PRs would deploy into and then
-# destroy each other's "ephemeral" stack.
-STAGE ?= $(or $(PII_ERASURE_STAGE),dev)
+# STAGE names the stack instance. Resolution order, highest first:
+#   1. make deploy-dev STAGE=foo      explicit override
+#   2. PII_ERASURE_STAGE in the shell  CI sets STAGE=pr-<run_id> per run
+#   3. PII_ERASURE_STAGE in .env       the human's default
+#   4. "dev"
+# Ephemeral eval stacks must actually be ephemeral — with a shared hardcoded
+# stage, two concurrent PRs would deploy into and then destroy each other's.
+STAGE ?= $(PII_ERASURE_STAGE)
+RESOLVE_STAGE = stage="$(STAGE)"; stage="$${stage:-$${PII_ERASURE_STAGE:-dev}}"
+
+.PHONY: bootstrap
+bootstrap: ## ⚠️ ONE-TIME per account+region: create the CDK toolkit stack. Human-only.
+	@$(LOAD_ENV); \
+	$(REQUIRE_REGION); \
+	acct=$$(aws sts get-caller-identity --query Account --output text) || \
+		{ echo "❌ no usable AWS credentials — configure them first"; exit 1; }; \
+	echo "bootstrapping aws://$$acct/$$AWS_REGION"; \
+	$(CDK) bootstrap "aws://$$acct/$$AWS_REGION"
 
 .PHONY: deploy-dev
 deploy-dev: ## ⚠️ Deploy a dev-shaped stack (STAGE=dev by default). Costs money.
-	cd infra && npx -y aws-cdk@2.1133.0 deploy --all --context stage=$(STAGE)
+	@$(LOAD_ENV); \
+	$(REQUIRE_REGION); \
+	$(RESOLVE_STAGE); \
+	echo "deploying stage=$$stage to $$AWS_REGION"; \
+	cd infra && $(CDK) deploy --all --app '$(CDK_APP)' --context stage="$$stage"
 
 .PHONY: deploy
 deploy: ## ⚠️ Deploy the production-shaped stack. Human-only. (M10)
-	cd infra && npx -y aws-cdk@2.1133.0 deploy --all --context stage=prod
+	@$(LOAD_ENV); \
+	$(REQUIRE_REGION); \
+	cd infra && $(CDK) deploy --all --app '$(CDK_APP)' --context stage=prod
 
 .PHONY: destroy-dev
 destroy-dev: ## ⚠️ Tear down the STAGE stack. Do this when you are done.
-	cd infra && npx -y aws-cdk@2.1133.0 destroy --all --context stage=$(STAGE)
+	@$(LOAD_ENV); \
+	$(REQUIRE_REGION); \
+	$(RESOLVE_STAGE); \
+	echo "destroying stage=$$stage in $$AWS_REGION"; \
+	cd infra && $(CDK) destroy --all --app '$(CDK_APP)' --context stage="$$stage"
 
 # ─── Data — DEPLOYED ──────────────────────────────────────────────────────────
 .PHONY: seed

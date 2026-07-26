@@ -32,7 +32,7 @@ Session loop:
 
 `make check` is green from commit zero **and needs no AWS account**: lint, unit tests, policy tests, and `cdk synth` with its IAM assertions. Milestone-gated targets print "⏳ lands at Mx" until their entry file exists, then become mandatory automatically. **Never re-add a guard to silence a failing gate.**
 
-**Anything that spends money or mutates real infrastructure is human-only** and denied in `.claude/settings.json`: `make deploy`, `make deploy-dev`, `make destroy-dev`, and any raw `cdk deploy`/`cdk destroy`. `make synth` is fine. Custom commands: `/next-milestone`, `/add-participant`, `/validate`.
+**Anything that spends money or mutates real infrastructure is human-only** and denied in `.claude/settings.json`: `make bootstrap`, `make deploy`, `make deploy-dev`, `make destroy-dev`, and any raw `cdk bootstrap`/`deploy`/`destroy`. `make synth` is fine. Custom commands: `/next-milestone`, `/add-participant`, `/validate`.
 
 ---
 
@@ -174,7 +174,8 @@ make check          # lint + unit + policy + synth  — hermetic, no AWS account
 make synth          # CDK synth with IAM assertions
 
 # these cost money and are human-only (denied in .claude/settings.json)
-make deploy-dev     # deploy the dev stack
+make bootstrap      # once per account + region — creates the CDK toolkit stack
+make deploy-dev     # deploy the dev stack. Reads AWS_REGION from .env; fails if unset
 make seed           # populate the deployed participants with fabricated subjects
 make conformance    # 5 verbs x 8 participants, against the deployed stack
 make integration    # full three-phase saga

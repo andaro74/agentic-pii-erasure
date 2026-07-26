@@ -28,6 +28,8 @@
       "Read(./.env)",
       "Bash(git push:*)",
 
+      "Bash(make bootstrap)",
+      "Bash(make bootstrap:*)",
       "Bash(make deploy)",
       "Bash(make deploy:*)",
       "Bash(make deploy-dev)",
@@ -36,10 +38,13 @@
       "Bash(make destroy-dev:*)",
       "Bash(cdk deploy:*)",
       "Bash(cdk destroy:*)",
+      "Bash(cdk bootstrap:*)",
       "Bash(npx aws-cdk deploy:*)",
       "Bash(npx aws-cdk destroy:*)",
+      "Bash(npx aws-cdk bootstrap:*)",
       "Bash(npx -y aws-cdk@2 deploy:*)",
       "Bash(npx -y aws-cdk@2 destroy:*)",
+      "Bash(npx -y aws-cdk@2 bootstrap:*)",
 
       "Bash(make seed)",
       "Bash(make seed:*)",

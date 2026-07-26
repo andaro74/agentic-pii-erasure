@@ -40,10 +40,31 @@ ARCHITECTURE §16 Q7 used to ask whether teaching the derived-index archetype wa
 
 ## Prerequisites
 
-- An AWS account and credentials with permission to create the resources below.
+- An AWS account and credentials with permission to create the resources below, reachable by the AWS CLI (`aws sts get-caller-identity` must succeed).
 - **Amazon Bedrock model access enabled** for your chosen Claude model in your region. Bedrock requires per-account, per-model opt-in; a deploy will succeed and discovery will then fail at runtime if you skip it.
 - **AgentCore availability in your region.** Check before choosing a region — the stack is regional and cross-region AgentCore is not a supported topology here.
-- Node (for the CDK CLI) and the repo's Python venv (`make install`).
+- Node (for the CDK CLI, fetched by `npx` at a pinned version) and the repo's Python venv (`make install`).
+
+## First run, in order
+
+Each step names the symptom you get by skipping it, because most of them do not fail where you made the mistake.
+
+| # | Step | Skip it and you get |
+|---|---|---|
+| 1 | Configure AWS credentials (`aws configure` / SSO / a profile) | `Unable to locate credentials` at step 6 |
+| 2 | `make install` — venv, pinned deps, and a `.env` copied from `.env.example` | `make check` cannot run |
+| 3 | Edit `.env`: set **`AWS_REGION`** to a region where AgentCore *and* your model are available | The make targets refuse to run and tell you so — deliberately; they do **not** fall back to your profile's region |
+| 4 | Enable Bedrock model access in that region, then put the inference profile ID in `PII_ERASURE_MODEL_ID` (`aws bedrock list-inference-profiles`) | A clean deploy, then a discovery failure at M7 |
+| 5 | `make check` — hermetic, no AWS account touched | Nothing; this is the free confidence check |
+| 6 | **`make bootstrap`** — one-time per account **and** region | `Environment aws://…/… has not been bootstrapped` at step 7 |
+| 7 | `make deploy-dev` | — |
+| 8 | `make destroy-dev` when you are done | See *Teardown* above |
+
+`make bootstrap` resolves your account from `aws sts get-caller-identity` and the region from `.env`, then creates the `CDKToolkit` stack (a staging bucket, an ECR repository, and the deploy roles). It is idempotent — re-running it is harmless — and it is **per region**: change `AWS_REGION` later and you bootstrap again.
+
+Steps 6–8 mutate real infrastructure and spend money, so they are denied to Claude Code in `.claude/settings.json` and run by a human.
+
+> **`.env` is read by these targets, and your shell wins.** `make` does not read `.env` on its own; the AWS-touching targets source it explicitly, and any variable already exported in your shell overrides the file. That is how CI supplies `AWS_REGION` and a per-run `PII_ERASURE_STAGE` without a `.env` at all. `make synth` deliberately does *not* load it — synth needs no region and no credentials, and it stays that way because it is part of the hermetic gate.
 
 ## Stacks
 
@@ -78,10 +99,13 @@ If one of these fails, the fix is the stack — never the assertion.
 ## Deploying
 
 ```bash
-make synth          # safe, free, no credentials needed
+make synth          # safe, free, no credentials needed, no .env needed
+make bootstrap      # ⚠️ human-only: once per account + region
 make deploy-dev     # ⚠️ human-only: creates infrastructure, spends money
 make destroy-dev    # do this
 ```
+
+`deploy-dev` and `destroy-dev` act on `STAGE`, which resolves in this order: `make deploy-dev STAGE=foo` → `PII_ERASURE_STAGE` in your shell → `PII_ERASURE_STAGE` in `.env` → `dev`. Both echo the stage and region before they act; read that line.
 
 `make deploy-dev`, `make deploy`, and `make destroy-dev` are denied to Claude Code in `.claude/settings.json`. They mutate real infrastructure and spend real money, so a human runs them, deliberately.
 
