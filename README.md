@@ -72,7 +72,7 @@ Meridian Outfitters is a made-up multi-brand retailer with fabricated customers.
 | `compliance-archive` | S3 Object Lock + KMS | **WORM** | No delete API exists. Crypto-shred or nothing. |
 | `vector-index` | S3 Vectors | Derived index | An embedding outlives its source — and *is* personal data |
 | `analytics-lake` | Glue / Athena (Iceberg) | Columnar analytics | You cannot delete a row from a Parquet file |
-| `notify-suppression` | SES suppression list | Residual by design | The suppression hash **must** stay — disclose it |
+| `notify-suppression` | SES suppression list | Residual by design | The suppression entry **must** stay — disclose it |
 
 `compliance-archive` and `notify-suppression` are the two worth reading first. Neither can honour a deletion request in the way the word implies, and pretending otherwise is how compliance incidents happen.
 

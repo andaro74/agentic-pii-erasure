@@ -364,6 +364,31 @@ in the chain, and each reported itself as something else. When adding a control,
 question is not only "can this fail?" but **"which link in source → artifact → deployment
 does it actually observe?"**
 
+### 2026-07-26 · V8 — pre-M4 validation pass
+
+Swept before building M4, because M4 implements the two participants these claims describe.
+Structural checks clean: **0 broken relative links** across all markdown; no superseded
+vocabulary (Step Functions, Fargate, CrewAI, Strands, OpenSearch) outside superseded ADRs,
+rejected-alternative tables and this file; `make check` green; none of the paths M4 creates
+are gitignored (checked with `git check-ignore` before writing a line, per V6-1).
+
+| ID | Severity | Finding | Resolution |
+|---|---|---|---|
+| V8-1 | **Medium** | **The repo's worked example of residual honesty misdescribes its own residual.** Seven documents and three source files stated that SES retains "the suppression hash". The SES v2 API has no hash anywhere: `PutSuppressedDestination` requires a plaintext `EmailAddress`, and `GetSuppressedDestination` returns `EmailAddress` as a required string. The real residual is the subject's **plaintext email address**, held at account level. | **Fixed** in all ten sites: the retained item is the *suppression entry*. The participant records that residual by digest — invariant 5 forbids the address itself appearing in a locator, ledger entry or log — and the docs now distinguish the two: what SES keeps, and how we are permitted to refer to it. |
+| V8-2 | **Low** | **`GetVectors` caps at 100 keys, not 500.** The docs consistently state ≤500 per call, which is correct for `PutVectors` and `DeleteVectors` but wrong for `GetVectors` — verified against the botocore service model (`GetVectorsInputList max=100`). `vector-index.verify()` reads by key, so a verifier batching at the documented 500 would fail at runtime against a subject with a large corpus. | **Fixed.** ROADMAP now states both limits, and the participant batches each call at its own ceiling. |
+
+**V8-1 is the interesting one, because the error was in the direction of comfort.** A hash
+is a *less* sensitive residual than a plaintext address. The file whose entire purpose is
+"disclose what remains, never hide it" understated what remains — not by lying, but by
+inheriting a plausible detail nobody had checked against the service. That is the same
+mechanism as V5-1 (the O(1) tool-surface claim): a statement about an AWS service that
+reads as technical fact, was written from a mental model of how such a service *would*
+work, and had never been compared with the API.
+
+The check that found it is cheap and worth repeating whenever a doc describes a service's
+behaviour: **read the botocore service model, not the prose.** Required members and shape
+constraints are machine-readable, local, and versioned with the SDK actually installed.
+
 1. Read a doc claim as an adversary: *what would make this false, and could the
    named control detect it?*
 2. If the control can't go red, that's a finding — record it here with the fix and

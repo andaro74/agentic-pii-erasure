@@ -270,7 +270,7 @@ Each archetype teaches a distinct deletion pattern against a service that genuin
 | 5 | `compliance-archive` | S3 Object Lock COMPLIANCE + KMS | **WORM — undeletable** | Revoke the read grant | **Crypto-shred: destroy the per-subject DEK** | Deletion redefined as irreversible loss of readability |
 | 6 | `vector-index` | **S3 Vectors** | Derived index | Re-`PutVectors` with a `deleted` flag in filterable metadata | `DeleteVectors` by derived key | An embedding outlives its source, and *is* personal data |
 | 7 | `analytics-lake` | S3 + Glue + Athena (Iceberg) | Columnar analytics | Filter view | Iceberg row-level delete + `expire_snapshots`, or crypto-shred | You cannot delete a row from a Parquet file — you rewrite or you shred |
-| 8 | `notify-suppression` | Amazon SES | Residual by design | Add to account suppression list | Delete the contact; **the suppression hash stays** | Some residual is legally required — disclose it, never hide it |
+| 8 | `notify-suppression` | Amazon SES | Residual by design | Add to account suppression list | Delete the contact; **the suppression entry stays** | Some residual is legally required — disclose it, never hide it |
 
 Archetypes 5 and 8 are the two worth reading first. Neither can honour a deletion request in the way the word implies.
 
@@ -659,7 +659,7 @@ An approval UI that dumps 400 JSON artifacts guarantees rubber-stamping, which c
 
 - **Blast radius** — systems, record counts, data classifications
 - **Diff against the tenant's historical baseline** — "this deletion touches a system the last 40 deletions did not." Anomalies, not inventories.
-- **Residual risk, stated first** — what will *not* be deleted and why (the SES suppression hash, the Iceberg snapshot window)
+- **Residual risk, stated first** — what will *not* be deleted and why (the SES suppression entry, the Iceberg snapshot window)
 - **Irreversibility countdown** — what becomes unrecoverable, and when
 
 ---

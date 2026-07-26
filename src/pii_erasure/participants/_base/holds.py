@@ -37,7 +37,7 @@ def deletability(
     """Classify what this participant can actually do, from what it can actually see.
 
     `undeletable_kinds` is how an archetype declares that some of what it found can never
-    be removed — the WORM ciphertext, the SES suppression hash. Reporting those as
+    be removed — the WORM ciphertext, the SES suppression entry. Reporting those as
     `DELETABLE` and discovering otherwise at phase 3 is the failure invariant 7 exists to
     prevent, and it starts here, at plan time, not at execution.
     """

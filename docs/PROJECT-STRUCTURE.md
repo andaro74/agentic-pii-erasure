@@ -78,7 +78,7 @@ participants/
 ├── compliance_archive/      WORM                · Object Lock + KMS · DEK shred only
 ├── vector_index/            DERIVED_INDEX       · S3 Vectors · orphan embeddings. ADR-021.
 ├── analytics_lake/          COLUMNAR            · Glue/Athena Iceberg · rewrite or shred
-└── notify_suppression/      RESIDUAL_BY_DESIGN  · SES · the suppression hash must stay
+└── notify_suppression/      RESIDUAL_BY_DESIGN  · SES · the suppression entry must stay
 ```
 
 `_base/guard.py` is defence in depth, not redundancy: AgentCore Policy is the control, and the participant is the backstop for a misconfigured Gateway target. A participant that receives a `hard_delete` without a valid digest-bound token refuses, logs, and returns `REFUSED`.

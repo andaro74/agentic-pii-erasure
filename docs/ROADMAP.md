@@ -83,7 +83,7 @@ There is no local mode ([ADR-017](adr/ADR-017-real-aws-participants.md)), so fro
 
 **Deployed done when:** `make seed` then `make conformance` green 8/8 · a ground-truth consistency test proving the map matches what the services actually contain.
 
-**Traps:** invariant 5 — seeded fake PII is treated as real everywhere; that discipline *is* the demo · eventual consistency is real now: the generator must wait on explicit consistency signals (GSI propagation, vector index visibility, Iceberg commit) rather than sleeping · `notify-suppression` must return `PARTIAL` for the retained hash, not `APPLIED` · `vector_index` has **no delete-by-query**: derive keys from `subjectRef`, batch at ≤500 per `PutVectors`/`DeleteVectors` call, and respect the per-index write ceiling when seeding the corpus · vector metadata is a PII surface and goes through the scrubber.
+**Traps:** invariant 5 — seeded fake PII is treated as real everywhere; that discipline *is* the demo · eventual consistency is real now: the generator must wait on explicit consistency signals (GSI propagation, vector index visibility, Iceberg commit) rather than sleeping · `notify-suppression` must return `PARTIAL` for the retained suppression entry — which holds the **plaintext address**, not a hash (V8-1) — never `APPLIED` · `vector_index` has **no delete-by-query**: derive keys from `subjectRef`, batch at ≤500 per `PutVectors`/`DeleteVectors` call but **≤100 per `GetVectors`** (V8-2), and respect the per-index write ceiling when seeding the corpus · vector metadata is a PII surface and goes through the scrubber.
 
 ## - [ ] M5 · The saga (LangGraph core — no model anywhere)
 

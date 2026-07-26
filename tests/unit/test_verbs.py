@@ -65,7 +65,7 @@ def test_partial_without_a_residual_cannot_be_constructed() -> None:
 
 
 def test_the_honest_partial_is_representable() -> None:
-    """`notify-suppression`'s real shape: the SES suppression hash stays, and says so."""
+    """`notify-suppression`'s real shape: the SES suppression entry stays, and says so."""
     response = _mutation(
         outcome=Outcome.PARTIAL,
         residual=(Residual(kind="hash", locator="ses:suppression", reason="required by SES"),),

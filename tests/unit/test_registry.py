@@ -29,7 +29,7 @@ def test_every_archetype_is_taught_exactly_once() -> None:
 
 def test_the_two_participants_that_cannot_fully_delete_are_named() -> None:
     """Invariant 7 is only meaningful if the honest exceptions are explicit. Iceberg rows
-    survive until snapshot expiry; the SES suppression hash is legally retained."""
+    survive until snapshot expiry; the SES suppression entry is legally retained."""
     residual = {spec.system_id for spec in PARTICIPANTS if spec.expects_residual}
     assert residual == {"analytics-lake", "notify-suppression"}
 

@@ -40,6 +40,6 @@ class Archetype(str, Enum):
     #: rewrite it or you shred it, and rows survive until snapshot expiry.
     COLUMNAR_ANALYTICS = "COLUMNAR_ANALYTICS"
 
-    #: SES. Some residual is legally required — the suppression hash stays. Disclose
+    #: SES. Some residual is legally required — the suppression entry stays. Disclose
     #: it, never hide it (invariant 7).
     RESIDUAL_BY_DESIGN = "RESIDUAL_BY_DESIGN"
