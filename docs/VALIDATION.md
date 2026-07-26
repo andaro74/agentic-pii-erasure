@@ -604,6 +604,36 @@ newest one: precisely the failure it was written to prevent, one level up. Caugh
 mutation-testing it and noticing the mutation produced *no* failure. **When a mutation
 changes nothing, check that the mutation applied before concluding the code is fine.**
 
+### 2026-07-26 · V8-10 — the Iceberg DDL was written in the wrong dialect
+
+`make seed` reached Athena and failed with
+`mismatched input 'LOCATION'. Expecting: 'COMMENT', 'WITH'`.
+
+| ID | Severity | Finding | Resolution |
+|---|---|---|---|
+| V8-10 | **Medium** | **`CREATE TABLE IF NOT EXISTS` is not in Athena's Iceberg grammar.** Adding the clause routes the statement into Athena's generic (Trino) `CREATE TABLE` parser, which expects table properties in a `WITH (...)` clause and rejects `LOCATION` outright. The `LOCATION` + `TBLPROPERTIES` form I had written is correct — for a statement *without* `IF NOT EXISTS`. The error names `LOCATION`, which is the one part that was right. | **Fixed** against the Athena user guide rather than memory. Idempotency now comes from catching "already exists", the same shape used for Cognito and SES. `EXTERNAL` is also asserted absent — it fails with *External keyword not supported for table type ICEBERG*. |
+
+**Second defect in the same call path, and the more dangerous one.** The generator's Athena
+runner waited for state `SUCCEEDED` and nothing else, so a **failed** statement span the
+full 30-second consistency budget and then raised a *timeout*. Athena's actual complaint —
+sitting in `StateChangeReason` the whole time — was discarded, and the report blamed
+slowness. It now waits for any terminal state and raises with the service's own reason.
+
+That is the third time in this log a defect has arrived wearing the wrong label: V6-1
+reported a missing package as an import-sort error, V7-2 reported a stale deployment as a
+code failure, and this reported a syntax error as a timeout. **A control that mislabels a
+failure costs more than one that misses it**, because it spends the reader's attention in
+the wrong place — and unlike a miss, it does so confidently.
+
+**On guessing at syntax.** The recalled form was the Hive `CREATE EXTERNAL TABLE` shape,
+which is right for a Glue external table and wrong for Iceberg. ROADMAP rule 3 says verify
+AWS API shapes against current documentation rather than memory; I applied that to the
+*botocore models* (V8-1, V8-2) and not to *SQL dialects*, which are equally versioned,
+equally service-specific, and not covered by any model I can introspect locally. Both
+guards are mutation-tested: reinstating `IF NOT EXISTS` fails, and widening the
+already-exists catch to swallow everything fails too — the latter matters because a broad
+catch would turn a genuine DDL error into a silent no-op, which is V8-9 again, self-inflicted.
+
 1. Read a doc claim as an adversary: *what would make this false, and could the
    named control detect it?*
 2. If the control can't go red, that's a finding — record it here with the fix and

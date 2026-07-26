@@ -25,29 +25,55 @@ from pii_erasure.participants.analytics_lake.handler import SNAPSHOT_RETENTION_D
 SNAPSHOT_RETENTION_SECONDS = SNAPSHOT_RETENTION_DAYS * 24 * 60 * 60
 
 
-def create_table_sql(*, database: str, table: str, location: str) -> str:
-    """DDL for the events table. Identifiers come from the stack, values from nowhere.
+#: Athena reports an existing table this way. Matched on the message because a DDL failure
+#: arrives as a query in state FAILED with a reason string, not as a typed exception.
+_ALREADY_EXISTS = "already exists"
 
-    `IF NOT EXISTS` because `make seed` is re-run constantly (V8-8) and applying the
-    schema must converge like every other write.
+
+def create_table_sql(*, database: str, table: str, location: str) -> str:
+    """DDL for the events table, in Athena's **Iceberg** `CREATE TABLE` grammar.
+
+    Two things about this statement are not free choices, and getting either wrong
+    produces a parse error rather than a helpful message (V8-10):
+
+    * **No `IF NOT EXISTS`.** It is absent from the documented Iceberg grammar. Including
+      it routes the statement into Athena's generic `CREATE TABLE` parser, which expects
+      properties in a `WITH (...)` clause and rejects `LOCATION` outright —
+      ``mismatched input 'LOCATION'. Expecting: 'COMMENT', 'WITH'``. Idempotency is
+      therefore handled by `ensure_table` catching "already exists", the same shape used
+      for Cognito and SES in the generator.
+    * **No `EXTERNAL`.** ``CREATE EXTERNAL TABLE`` fails with *External keyword not
+      supported for table type ICEBERG*. Athena creates Iceberg tables directly.
+
+    Verified against the Athena user guide rather than recalled, after the recalled form
+    turned out to be the Hive one.
     """
     return (
-        f'CREATE TABLE IF NOT EXISTS "{database}"."{table}" ('
-        "  subject_ref string,"
-        "  event string,"
-        "  asdp_state string"
+        f"CREATE TABLE {database}.{table} ("
+        " subject_ref string,"
+        " event string,"
+        " asdp_state string"
         ") "
         f"LOCATION '{location}' "
         "TBLPROPERTIES ("
-        "  'table_type' = 'ICEBERG',"
-        "  'format' = 'parquet',"
-        f"  'vacuum_max_snapshot_age_seconds' = '{SNAPSHOT_RETENTION_SECONDS}'"
+        " 'table_type' = 'ICEBERG',"
+        " 'format' = 'parquet',"
+        f" 'vacuum_max_snapshot_age_seconds' = '{SNAPSHOT_RETENTION_SECONDS}'"
         ")"
     )
 
 
 def ensure_table(runner: Any, *, database: str, table: str, location: str) -> str:
-    """Apply the DDL through a caller-supplied Athena runner. Returns the statement."""
+    """Create the table if it is not there. Returns the statement attempted.
+
+    Converges rather than erroring, because `make seed` is re-run constantly (V8-8) — but
+    via a caught error rather than `IF NOT EXISTS`, which the Iceberg grammar does not
+    accept. An existing table is the declared state reached, not a failure.
+    """
     statement = create_table_sql(database=database, table=table, location=location)
-    runner(statement)
+    try:
+        runner(statement)
+    except Exception as error:
+        if _ALREADY_EXISTS not in str(error).lower():
+            raise
     return statement

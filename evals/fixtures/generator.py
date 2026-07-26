@@ -74,6 +74,10 @@ class ConsistencyTimeoutError(RuntimeError):
     """A write did not become readable in time. Never recorded as ground truth."""
 
 
+class AthenaStatementError(RuntimeError):
+    """A statement reached a terminal non-success state. Carries Athena's own reason."""
+
+
 @dataclass(frozen=True)
 class Placement:
     """What was actually written for one subject in one system."""
@@ -453,6 +457,14 @@ class FixtureGenerator:
         )
 
     def _athena(self, statement: str) -> str:
+        """Run one statement and wait for a **terminal** state, not for success.
+
+        Waiting only for `SUCCEEDED` meant a failed statement span the full consistency
+        budget and then reported a *timeout* — hiding Athena's actual complaint behind a
+        message about slowness. `FAILED` is terminal and immediate; surfacing its
+        `StateChangeReason` is the difference between "the query is wrong, here is why"
+        and thirty seconds of nothing.
+        """
         athena = self._clients["athena"]
         started = athena.start_query_execution(
             QueryString=statement,
@@ -460,15 +472,22 @@ class FixtureGenerator:
             WorkGroup=self._config["athenaWorkgroup"],
         )
         execution_id: str = started["QueryExecutionId"]
-        _await_readable(
-            lambda: (
-                athena.get_query_execution(QueryExecutionId=execution_id)["QueryExecution"][
-                    "Status"
-                ]["State"]
-                == "SUCCEEDED"
-            ),
-            what=f"athena statement {execution_id}",
-        )
+        status: dict[str, Any] = {}
+
+        def _terminal() -> bool:
+            nonlocal status
+            status = athena.get_query_execution(QueryExecutionId=execution_id)["QueryExecution"][
+                "Status"
+            ]
+            return bool(status["State"] in {"SUCCEEDED", "FAILED", "CANCELLED"})
+
+        _await_readable(_terminal, what=f"athena statement {execution_id}")
+
+        if status["State"] != "SUCCEEDED":
+            raise AthenaStatementError(
+                f"{status['State']}: {status.get('StateChangeReason', 'no reason given')}"
+                f"\n  statement: {statement[:200]}"
+            )
         return execution_id
 
 

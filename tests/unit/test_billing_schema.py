@@ -148,3 +148,50 @@ def test_no_schema_statement_carries_subject_data(statement: str) -> None:
     lowered = statement.lower()
     assert "insert" not in lowered
     assert "@" not in statement
+
+
+# ─── the analytics lake's Iceberg DDL (V8-10) ─────────────────────────────────────────
+
+
+def test_the_iceberg_ddl_matches_athenas_documented_grammar() -> None:
+    """Two clauses Athena rejects, each with an unhelpful error.
+
+    `IF NOT EXISTS` routes the statement into the generic CREATE TABLE parser, which wants
+    `WITH (...)` and rejects `LOCATION`. `EXTERNAL` fails with "External keyword not
+    supported for table type ICEBERG". Both are parse-time failures against a deployed
+    workgroup, which is the slowest place to discover a syntax question.
+    """
+    from pii_erasure.participants.analytics_lake.schema import create_table_sql
+
+    ddl = create_table_sql(database="lake", table="events", location="s3://bucket/events/")
+
+    assert "IF NOT EXISTS" not in ddl
+    assert "CREATE EXTERNAL TABLE" not in ddl
+    assert ddl.startswith("CREATE TABLE lake.events (")
+    # LOCATION then TBLPROPERTIES, in that order — the Iceberg form, not the Trino WITH form.
+    assert ddl.index("LOCATION") < ddl.index("TBLPROPERTIES")
+    assert "WITH (" not in ddl
+    assert "'table_type' = 'ICEBERG'" in ddl
+
+
+def test_an_existing_table_is_not_an_error() -> None:
+    """Idempotency without IF NOT EXISTS: the grammar forbids the clause, so the error is
+    caught instead. `make seed` is re-run constantly (V8-8)."""
+    from pii_erasure.participants.analytics_lake.schema import ensure_table
+
+    def _already_there(_: str) -> None:
+        raise RuntimeError("FAILED: Table already exists: events")
+
+    ensure_table(_already_there, database="lake", table="events", location="s3://b/e/")
+
+
+def test_a_real_ddl_failure_still_propagates() -> None:
+    """The catch must be narrow, or a genuine syntax error becomes a silent no-op and the
+    table never exists — which is V8-9 again, this time self-inflicted."""
+    from pii_erasure.participants.analytics_lake.schema import ensure_table
+
+    def _syntax_error(_: str) -> None:
+        raise RuntimeError("FAILED: mismatched input 'LOCATION'. Expecting: 'WITH'")
+
+    with pytest.raises(RuntimeError, match="mismatched input"):
+        ensure_table(_syntax_error, database="lake", table="events", location="s3://b/e/")
