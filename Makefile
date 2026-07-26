@@ -166,7 +166,11 @@ destroy-dev: ## ⚠️ Tear down the STAGE stack. Do this when you are done.
 # ─── Data — DEPLOYED ──────────────────────────────────────────────────────────
 .PHONY: seed
 seed: ## Write fabricated subjects into the deployed participants (M4)
-	$(PY) -m pii_erasure.cli.main seed --tenant meridian
+	@# The tenant comes from .env rather than a literal here: a hardcoded name three
+	@# lines from a PII_ERASURE_TENANT that nothing read is worse than no setting at
+	@# all — it looks configurable and silently is not (VALIDATION V4-4).
+	@$(LOAD_ENV); \
+	$(PY) -m pii_erasure.cli.main seed --tenant "$${PII_ERASURE_TENANT:-meridian}"
 
 .PHONY: inspect
 inspect: ## Dump one participant's state. Usage: make inspect P=compliance-archive (M4)

@@ -198,6 +198,19 @@ it reached a deploy. Precedence is now applied to the two variables by name.
 Both guards were **mutation-tested**: with `LOAD_ENV` replaced by a naive `. ./.env`, the two
 precedence cases go red. A guard nobody has watched fail is a guard nobody has tested.
 
+### 2026-07-26 · Follow-up to V4-1 — the rest of the settings with no mechanism
+
+V4-1 fixed one inert variable. Asking "how many others are there" was a question nobody
+had asked, and the answer was six — which makes the finding a *class*, not an incident.
+
+| ID | Severity | Finding | Resolution |
+|---|---|---|---|
+| V4-4 | Medium | **A setting that can never be wired, and five that are not wired yet, with nothing distinguishing them.** `PII_ERASURE_STACK_PREFIX` was read by nothing and never will be: `asdp-` is a literal in `infra/app.py`, the ADRs, `infra/README.md` and the synth assertions. It reads like isolation and provides none — two deployments in one account under different prefixes would collide, because the second `make deploy-dev` updates the first one's stack. That is V3-1's failure shape wearing different clothes; `PII_ERASURE_STAGE` is the mechanism that actually separates them. Separately, `PII_ERASURE_MODEL_ID`, `PII_ERASURE_POLICY_MODE`, `PII_ERASURE_TENANT`, the two timer variables and `OTEL_SERVICE_NAME` are all legitimately unconsumed — their milestones are unbuilt — but nothing in the file said so, so a reader could not tell "not built yet" from "you typed it wrong". Worst of them: `Makefile`'s `seed` target hardcoded `--tenant meridian` three lines from a `PII_ERASURE_TENANT` nothing read. | **Fixed.** The prefix is deleted; every not-yet-consumed variable carries a `⏳ lands at Mx` marker naming its milestone; `seed` reads `$PII_ERASURE_TENANT`. Backed by `tests/unit/test_env_example.py`, which parses `.env.example` and fails unless each variable is *either* referenced under `src/`, `infra/`, the `Makefile` or the workflow, *or* carries a marker — so the class cannot recur silently. Mutation-tested: re-adding the prefix and inventing a knob produce three failures. |
+
+The generalisation worth keeping: **V4-1 was found by walking the documented path, V4-4 by
+asking what else shares its shape.** The first needs a human on a clean machine; the second
+is a fifteen-line parser. Both are cheaper than the deploy that goes to the wrong region.
+
 1. Read a doc claim as an adversary: *what would make this false, and could the
    named control detect it?*
 2. If the control can't go red, that's a finding — record it here with the fix and
