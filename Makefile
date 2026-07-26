@@ -221,10 +221,13 @@ destroy-dev: ## ⚠️ Tear down the STAGE stack. Do this when you are done.
 # ─── Data — DEPLOYED ──────────────────────────────────────────────────────────
 .PHONY: seed
 seed: ## Write fabricated subjects into the deployed participants (M4)
-	@# The tenant comes from .env rather than a literal here: a hardcoded name three
-	@# lines from a PII_ERASURE_TENANT that nothing read is worse than no setting at
-	@# all — it looks configurable and silently is not (VALIDATION V4-4).
+	@# PII_ERASURE_TENANT is passed through and **checked against the seed file**, not
+	@# used to override it. A hardcoded name three lines from a setting nothing reads is
+	@# worse than no setting at all (V4-4) — but a setting that silently wins over the
+	@# fixture is worse still, because it stamps one tenant's name onto another's data
+	@# and every downstream count is wrong with no error to notice. Mismatch stops the run.
 	@$(LOAD_ENV); \
+	$(REQUIRE_REGION); \
 	$(PY) -m pii_erasure.cli.main seed --tenant "$${PII_ERASURE_TENANT:-meridian}"
 
 .PHONY: inspect

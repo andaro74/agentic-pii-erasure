@@ -447,6 +447,44 @@ a correct answer to the wrong question, and a check that would have kept failing
 bug was fixed. The pattern is now anchored to the attribute access. Guards need testing in
 both directions for the same reason the things they guard do.
 
+### 2026-07-26 · V8-6 — the Makefile and the CLI disagreed about the CLI
+
+`make seed` failed with `No such option: --tenant`.
+
+| ID | Severity | Finding | Resolution |
+|---|---|---|---|
+| V8-6 | **Medium** | **Seven `make` targets invoked CLI commands with options those commands do not accept.** `seed` was rewritten at M4 and its make target was not re-read, so the two drifted apart *in the same commit that built them*. The other six (`ledger --verify`, `discover --subject`, `threads --list`, `resume --thread`, `approve --thread --decision`, and `inspect --participant`) had drifted earlier and silently: click rejects unknown options *before* the command body runs, so an unbuilt command printed `No such option` instead of "⏳ lands at M5" — a parser error standing in for a roadmap fact, and the M0 design intent quietly lost. | **Fixed.** `seed` takes `--tenant`; unbuilt commands accept unknown options so they can still announce their milestone; `inspect` was rewritten to the interface the Makefile and ROADMAP already documented. Backed by `tests/unit/test_makefile_cli_contract.py`, which introspects the click parser rather than a hand-maintained flag list. |
+
+**Two second-order findings came out of it, both worse than the reported error.**
+
+**`inspect` had drifted in *meaning*, not just in flags.** The Makefile and ROADMAP both
+say "dump one participant's state", and I built it to take a subject handle and print that
+subject's placement across systems. Same word, different command. The flag mismatch was
+the visible symptom of a semantic divergence that a flag-name check alone would have
+"fixed" by changing the Makefile to match the wrong implementation. It now matches its
+documented interface: `--participant` required, `--subject` optional as a filter.
+
+**The tenant had two sources of truth.** `--tenant` came from `PII_ERASURE_TENANT` and
+`_stack_config()` *also* read that variable, while `seeds/meridian.json` declares
+`tenantId` independently. Nothing reconciled them, so a divergent env var would have
+stamped one tenant's name onto another tenant's seeded rows — wrong in every downstream
+count, with no error to notice. The flag is now an **assertion**: it is compared against
+the seed file and a mismatch stops the run. This is V4-4's lesson one turn further on — a
+setting nothing reads is bad; a setting that silently *wins* over the fixture is worse.
+
+**Why no gate caught it.** `make check` runs the test suite; it never runs the make
+targets. The CLI's own tests call functions directly, so they never traverse the parser.
+The seam between "how the Makefile invokes the CLI" and "what the CLI accepts" had nothing
+watching it, and it is a seam that only reports at the worst moment — `seed` is a
+deployed-gate target, so the failure surfaces after a human has stood up a stack and is
+waiting on it.
+
+The new test closes it by introspecting the click command objects Typer builds, so it
+cannot drift from the real parser the way a list of expected flag names would. Its
+exemption for unbuilt commands is itself guarded: a *built* command carrying
+`ignore_unknown_options` would accept `--typo` in silence, so a second test fails if the
+exemption is ever used outside `_UNBUILT`. Both verified by mutation.
+
 1. Read a doc claim as an adversary: *what would make this false, and could the
    named control detect it?*
 2. If the control can't go red, that's a finding — record it here with the fix and
