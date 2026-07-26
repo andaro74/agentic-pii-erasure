@@ -226,7 +226,13 @@ ledger: ## Print the hash-chained audit ledger and verify the chain (M5)
 
 # ─── Gates — DEPLOYED ─────────────────────────────────────────────────────────
 .PHONY: conformance
-conformance: ## 5 verbs x 8 participants, against the deployed stack (M2)
+conformance: package synth ## 5 verbs x 8 participants, against the deployed stack (M2)
+	@# `package synth` are prerequisites, not politeness: the suite's preflight compares
+	@# the asset hash CDK derives from the working tree against the one the deployed
+	@# stack is running, and that comparison is only meaningful if both sides are
+	@# current. Synthesising from a stale staging directory produces a hash that matches
+	@# the deployed stack and reports "up to date" while testing yesterday's bytes —
+	@# which is exactly how V7-2 wasted a deploy-and-test cycle.
 	@if ls tests/conformance/test_*.py >/dev/null 2>&1; then \
 		$(PYTEST) tests/conformance -m conformance; \
 	else echo "⏳ lands at M2 — docs/ROADMAP.md"; fi

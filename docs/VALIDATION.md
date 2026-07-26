@@ -331,6 +331,39 @@ cannot see a dependency the asset fails to vendor. `make conformance` remains th
 gate for that, which is ADR-017's argument restated: a hermetic test proves what its
 author already modelled.
 
+### 2026-07-26 · V7-2 — the deployed gate graded code that was never deployed
+
+Found immediately after V7-1, by the fix appearing not to work.
+
+| ID | Severity | Finding | Resolution |
+|---|---|---|---|
+| V7-2 | **High** | **Nothing compared the deployed Lambda code against the working tree.** After V7-1 was fixed and committed, `make conformance` was re-run and reported 16 failures with the *same* `Runtime.ImportModuleError` — because the stack was still running the previous build. The suite has no notion of which bytes it is grading, so "the fix is wrong" and "the fix was never deployed" are indistinguishable from its output. The costlier of the two readings is the one it invites, since it sends you back to correct code. | **Fixed.** `tests/conformance/conftest.py` adds a session-scoped preflight that compares each named Lambda's `Code.S3Key` — the asset hash CDK derives from the staging directory — between the locally synthesised template and the deployed one, and fails the session before a single verb is graded. `make conformance` now depends on `package synth` so both sides of the comparison are current. |
+
+**No fingerprinting scheme of our own.** CDK already hashes the asset directory into
+`Code.S3Key`, so the question "is the running code built from this working tree?" has an
+exact answer available from one read-only `GetTemplate` call. Resources without an explicit
+`FunctionName` are excluded: those are aws-cdk-lib's own custom-resource handlers, and they
+legitimately differ when the CDK version moves.
+
+**The false pass is the mechanism, not a hypothetical.** Comparing the hashes *before*
+re-staging the asset reported agreement — `c4cec548…` on both sides — because `cdk.out`
+had been synthesised from the same stale staging directory the stack was deployed from.
+Re-running `make package` changed the local hash to `659cc3cf…` and the disagreement
+appeared. A staleness check whose inputs are themselves stale confirms whatever it is
+shown, which is why the Makefile prerequisites are load-bearing rather than convenience.
+
+The guard needed no synthetic mutation: it was written while the stack was still stale and
+fired on the real divergence, naming both hashes. It was then verified in the passing
+direction too, because a check that cannot go green is no more use than one that cannot go
+red.
+
+**Third-order note.** V6-1, V7-1 and V7-2 are one family seen from three distances — the
+repository differing from the machine, the artifact differing from the repository, and the
+deployment differing from the artifact. Each was invisible to every gate that ran *earlier*
+in the chain, and each reported itself as something else. When adding a control, the useful
+question is not only "can this fail?" but **"which link in source → artifact → deployment
+does it actually observe?"**
+
 1. Read a doc claim as an adversary: *what would make this false, and could the
    named control detect it?*
 2. If the control can't go red, that's a finding — record it here with the fix and
