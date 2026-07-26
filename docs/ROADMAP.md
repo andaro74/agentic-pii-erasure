@@ -33,7 +33,7 @@ There is no local mode ([ADR-017](adr/ADR-017-real-aws-participants.md)), so fro
 
 ---
 
-## - [ ] M0 · Walking skeleton + a stack that synthesises
+## - [x] M0 · Walking skeleton + a stack that synthesises
 
 **Goal:** the package installs, imports, has a CLI, and `infra/` synthesises to CloudFormation. Everything after this is adding organs to a living body — and on an AWS-only platform, "living" includes the deployment artifact.
 

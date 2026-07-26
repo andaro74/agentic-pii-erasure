@@ -3,4 +3,6 @@
 See docs/ARCHITECTURE.md for the design and docs/ROADMAP.md for the build order.
 """
 
-__version__ = "0.1.0"
+from importlib.metadata import version as _version
+
+__version__ = _version("agentic-pii-erasure")

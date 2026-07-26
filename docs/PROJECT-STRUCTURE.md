@@ -14,6 +14,7 @@ agentic-pii-erasure/
 ├── CLAUDE.md                  invariants and conventions for Claude Code
 ├── LICENSE                    MIT
 ├── pyproject.toml             ⚠️ langgraph AND langgraph-checkpoint-aws are PINNED. See ADR-016.
+├── requirements.lock          the transitive layer under those pins (make lock; invariant 9)
 ├── Makefile                   the only interface anyone needs
 ├── .env.example               region, stack name, model ID — no secrets, SigV4 only
 ├── .github/workflows/ci.yml   hermetic gates · ephemeral eval stack · upgrade canary

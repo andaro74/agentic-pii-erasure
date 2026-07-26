@@ -1,0 +1,40 @@
+"""CDK app entrypoint.
+
+Environment-agnostic on purpose: `make synth` runs in `make check` on every
+commit with no AWS account, so nothing here may perform an account lookup.
+
+`stage` comes from CDK context (`--context stage=…`), which the Makefile feeds
+from $STAGE / $PII_ERASURE_STAGE — CI passes a per-run value so ephemeral eval
+stacks are actually ephemeral (VALIDATION finding V3-1).
+"""
+
+from __future__ import annotations
+
+import os
+
+from aws_cdk import App
+from stacks.foundation import FoundationStack
+
+app = App()
+
+stage: str = app.node.try_get_context("stage") or "dev"
+
+# COMPLIANCE-mode Object Lock cannot be shortened or overridden after write —
+# not by root, not by anyone. Prod pins the ledger's statutory 7 years; every
+# other stage reads a short window from the environment so the bucket can
+# actually be torn down (infra/README.md leads with this hazard).
+_SEVEN_YEARS_DAYS = 2557
+object_lock_days: int = (
+    _SEVEN_YEARS_DAYS
+    if stage == "prod"
+    else int(os.environ.get("PII_ERASURE_DEV_OBJECT_LOCK_DAYS", "1"))
+)
+
+FoundationStack(
+    app,
+    f"asdp-{stage}-foundation",
+    stage=stage,
+    object_lock_days=object_lock_days,
+)
+
+app.synth()

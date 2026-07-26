@@ -35,12 +35,25 @@ help: ## Show this help
 
 # ─── Setup ────────────────────────────────────────────────────────────────────
 .PHONY: install
-install: ## Create venv and install with dev extras
+install: ## Create venv and install (lockfile-constrained) with dev extras
 	python3 -m venv .venv
-	$(PIP) install -U pip
-	$(PIP) install -e ".[dev,infra,otel]"
+	$(PY) -m pip install -U pip
+	@# requirements.lock pins the transitive layer under the invariant-9 pins
+	@# (ADR-016). It constrains rather than installs, so extras resolve freely
+	@# where the lock is silent. Regenerate ONLY via make lock + upgrade-canary.
+	@if [ -f requirements.lock ]; then \
+		$(PY) -m pip install -c requirements.lock -e ".[dev,infra,otel]"; \
+	else \
+		$(PY) -m pip install -e ".[dev,infra,otel]"; \
+	fi
 	@test -f .env || cp .env.example .env
 	@echo "✅ next: make check · then open docs/ROADMAP.md"
+
+.PHONY: lock
+lock: ## Regenerate requirements.lock from the runtime deps (invariant 9 mechanism)
+	$(PY) -m pip install -q pip-tools
+	$(PY) -m piptools compile --quiet --strip-extras -o requirements.lock pyproject.toml
+	@echo "requirements.lock regenerated — a langgraph/checkpoint-aws bump requires make upgrade-canary"
 
 # ─── Quality — HERMETIC, no AWS account ───────────────────────────────────────
 .PHONY: lint
@@ -64,10 +77,14 @@ policy-test: ## Cedar policy tests + engine/Cedar divergence test (M6)
 		$(PYTEST) tests/unit/test_policies.py; \
 	else echo "⏳ lands at M6 — docs/ROADMAP.md"; fi
 
+# cdk.json says "python app.py" for humans with an activated venv; make always
+# passes the venv interpreter explicitly so synth works from a bare shell.
+CDK_APP := "$(abspath $(VENV_BIN)/python)" app.py
+
 .PHONY: synth
 synth: ## CDK synth. Free, no credentials. IAM assertions live in tests/unit. (M0)
 	@if [ -f infra/app.py ]; then \
-		cd infra && npx -y aws-cdk@2 synth --quiet; \
+		cd infra && npx -y aws-cdk@2.1133.0 synth --quiet --app '$(CDK_APP)'; \
 	else echo "⏳ lands at M0 — docs/ROADMAP.md"; fi
 
 .PHONY: check
@@ -87,15 +104,15 @@ STAGE ?= $(or $(PII_ERASURE_STAGE),dev)
 
 .PHONY: deploy-dev
 deploy-dev: ## ⚠️ Deploy a dev-shaped stack (STAGE=dev by default). Costs money.
-	cd infra && npx -y aws-cdk@2 deploy --all --context stage=$(STAGE)
+	cd infra && npx -y aws-cdk@2.1133.0 deploy --all --context stage=$(STAGE)
 
 .PHONY: deploy
 deploy: ## ⚠️ Deploy the production-shaped stack. Human-only. (M10)
-	cd infra && npx -y aws-cdk@2 deploy --all --context stage=prod
+	cd infra && npx -y aws-cdk@2.1133.0 deploy --all --context stage=prod
 
 .PHONY: destroy-dev
 destroy-dev: ## ⚠️ Tear down the STAGE stack. Do this when you are done.
-	cd infra && npx -y aws-cdk@2 destroy --all --context stage=$(STAGE)
+	cd infra && npx -y aws-cdk@2.1133.0 destroy --all --context stage=$(STAGE)
 
 # ─── Data — DEPLOYED ──────────────────────────────────────────────────────────
 .PHONY: seed
