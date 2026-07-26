@@ -192,6 +192,21 @@ class _FakeDynamo:
         return self.tables.setdefault(name, _FakeTable())
 
 
+_CONFIG: dict[str, str] = {
+    "tenantId": "meridian",
+    "userPoolId": "pool",
+    "profileTable": "profiles",
+    "uploadBucket": "uploads",
+    "archiveBucket": "archive",
+    "dekRegistryTable": "deks",
+    "analyticsTable": "events",
+    "analyticsBucket": "lakebucket",
+    "analyticsDatabase": "lake",
+    "athenaWorkgroup": "wg",
+    "contactList": "meridian",
+}
+
+
 @pytest.fixture
 def rig() -> tuple[FixtureGenerator, dict[str, Any]]:
     clients: dict[str, Any] = {
@@ -201,19 +216,7 @@ def rig() -> tuple[FixtureGenerator, dict[str, Any]]:
         "athena": _FakeAthena(),
         "sesv2": _FakeSes(),
     }
-    config = {
-        "tenantId": "meridian",
-        "userPoolId": "pool",
-        "profileTable": "profiles",
-        "uploadBucket": "uploads",
-        "archiveBucket": "archive",
-        "dekRegistryTable": "deks",
-        "analyticsTable": "events",
-        "analyticsBucket": "lakebucket",
-        "analyticsDatabase": "lake",
-        "athenaWorkgroup": "wg",
-        "contactList": "meridian",
-    }
+    config = _CONFIG
     return FixtureGenerator(clients=clients, config=config), clients
 
 
@@ -283,3 +286,76 @@ def test_existing_identities_do_not_stop_a_re_run(
 
     assert "cognito-identity" in truth.systems_for("sub_mar_7f3a91c4")
     assert "notify-suppression" in truth.systems_for("sub_mar_7f3a91c4")
+
+
+# ─── SES sandbox (V8-11) ──────────────────────────────────────────────────────────────
+
+
+_SANDBOX_MESSAGE = "Your account is still in the sandbox."
+
+
+def _sandbox(clients: dict[str, Any]) -> None:
+    """Give the rig an account without SES production access.
+
+    Contacts still work — only `PutSuppressedDestination` is refused, and SES reports it
+    as a generic `BadRequestException` whose *message* is the only signal.
+    """
+
+    def _refuse(**_: Any) -> dict[str, Any]:
+        raise ClientError(
+            {"Error": {"Code": "BadRequestException", "Message": _SANDBOX_MESSAGE}},
+            "PutSuppressedDestination",
+        )
+
+    clients["sesv2"].put_suppressed_destination = _refuse
+
+
+def test_the_sandbox_stops_the_seed_by_default(
+    rig: tuple[FixtureGenerator, dict[str, Any]],
+) -> None:
+    """Failing loudly is right: notify-suppression is invariant 7's worked example, and a
+    seed that quietly omitted the suppression entry would look complete while the archetype
+    it exists to demonstrate was absent."""
+    from evals.fixtures.generator import SesSandboxError
+
+    generator, clients = rig
+    _sandbox(clients)
+
+    with pytest.raises(SesSandboxError, match="production access"):
+        generator.run(SEEDS)
+
+
+def test_the_opt_out_records_the_gap_rather_than_hiding_it(
+    rig: tuple[FixtureGenerator, dict[str, Any]],
+) -> None:
+    """Proceeding is allowed; pretending is not. The map must carry the degradation."""
+    _, clients = rig
+    _sandbox(clients)
+    generator = FixtureGenerator(clients=clients, config=_CONFIG, allow_ses_sandbox=True)
+
+    truth = generator.run(SEEDS)
+    body = truth.to_json()
+
+    assert truth.degraded, "the gap must be recorded, not merely tolerated"
+    assert "degraded" in body
+    assert "RESIDUAL_BY_DESIGN" in body["degraded"][0]
+    # And the count must tell the truth: no entry was written.
+    placement = body["subjects"]["sub_mar_7f3a91c4"]["notify-suppression"]
+    assert placement["suppressionEntries"] == 0
+    assert placement["contacts"] == 1, "the contact still seeds; only suppression is blocked"
+
+
+def test_a_non_sandbox_bad_request_still_fails(
+    rig: tuple[FixtureGenerator, dict[str, Any]],
+) -> None:
+    """The match is on the message, so it must stay narrow — any other BadRequest is a
+    real defect and must not be absorbed by the sandbox escape hatch."""
+    generator, clients = rig
+
+    def _other(**_: Any) -> dict[str, Any]:
+        raise _client_error("BadRequestException", "PutSuppressedDestination")
+
+    clients["sesv2"].put_suppressed_destination = _other  # type: ignore[method-assign]
+
+    with pytest.raises(ClientError):
+        generator.run(SEEDS)

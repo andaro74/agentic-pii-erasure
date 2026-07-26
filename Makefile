@@ -194,7 +194,7 @@ preflight: ## Check region-specific facts cdk synth cannot know. Read-only, free
 		echo "   update AuroraPostgresEngineVersion in infra/stacks/participants.py"; \
 		exit 1; \
 	fi; \
-	echo "✅ preflight passed"
+	ses=$$(aws sesv2 get-account --query ProductionAccessEnabled --output text 2>/dev/null); 	if [ "$$ses" != "True" ]; then 		echo "⚠️  SES is in the SANDBOX (ProductionAccessEnabled=$$ses)."; 		echo "   PutSuppressedDestination is refused, so notify-suppression cannot be"; 		echo "   seeded with a suppression entry and the RESIDUAL_BY_DESIGN archetype"; 		echo "   (invariant 7's worked example) will not be demonstrated."; 		echo "   Fix: SES console -> Account dashboard -> Request production access."; 		echo "   Or:  make seed ALLOW_SES_SANDBOX=1  (records the gap in ground truth)"; 	fi; 	echo "✅ preflight passed"
 
 .PHONY: deploy-dev
 deploy-dev: package preflight ## ⚠️ Deploy a dev-shaped stack (STAGE=dev by default). Costs money.
@@ -228,7 +228,7 @@ seed: ## Write fabricated subjects into the deployed participants (M4)
 	@# and every downstream count is wrong with no error to notice. Mismatch stops the run.
 	@$(LOAD_ENV); \
 	$(REQUIRE_REGION); \
-	$(PY) -m pii_erasure.cli.main seed --tenant "$${PII_ERASURE_TENANT:-meridian}"
+	$(PY) -m pii_erasure.cli.main seed --tenant "$${PII_ERASURE_TENANT:-meridian}" 		$${ALLOW_SES_SANDBOX:+--allow-ses-sandbox}
 
 .PHONY: inspect
 inspect: ## Dump one participant's state. Usage: make inspect P=compliance-archive (M4)

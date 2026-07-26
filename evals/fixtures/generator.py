@@ -78,6 +78,15 @@ class AthenaStatementError(RuntimeError):
     """A statement reached a terminal non-success state. Carries Athena's own reason."""
 
 
+class SesSandboxError(RuntimeError):
+    """The account cannot hold suppression entries, so the residual archetype is unseedable.
+
+    Raised rather than skipped by default: `notify-suppression` is invariant 7's worked
+    example, and a seed that quietly omits the one artifact the archetype exists to
+    demonstrate would leave the demo looking complete while proving nothing.
+    """
+
+
 @dataclass(frozen=True)
 class Placement:
     """What was actually written for one subject in one system."""
@@ -92,6 +101,10 @@ class GroundTruth:
 
     tenant_id: str
     subjects: dict[str, list[Placement]] = field(default_factory=dict)
+
+    #: Capabilities the environment could not provide. Written into the map so a later
+    #: reader — or a recall run — cannot mistake a partial seed for a complete one.
+    degraded: list[str] = field(default_factory=list)
 
     def record(self, subject_ref: str, placement: Placement) -> None:
         if not placement.artifacts or not any(placement.artifacts.values()):
@@ -109,6 +122,7 @@ class GroundTruth:
                 "edited denominator makes the gate measure nothing (ADR-008)."
             ),
             "tenantId": self.tenant_id,
+            **({"degraded": sorted(self.degraded)} if self.degraded else {}),
             "subjects": {
                 subject_ref: {
                     p.system_id: p.artifacts for p in sorted(places, key=lambda x: x.system_id)
@@ -147,9 +161,16 @@ class FixtureGenerator:
     only place they can be exercised honestly (ADR-017).
     """
 
-    def __init__(self, *, clients: dict[str, Any], config: dict[str, str]) -> None:
+    def __init__(
+        self,
+        *,
+        clients: dict[str, Any],
+        config: dict[str, str],
+        allow_ses_sandbox: bool = False,
+    ) -> None:
         self._clients = clients
         self._config = config
+        self._allow_ses_sandbox = allow_ses_sandbox
         self._schema_applied = False
         self._table_applied = False
 
@@ -159,6 +180,7 @@ class FixtureGenerator:
         data = seeds if seeds is not None else load_seeds()
         truth = GroundTruth(tenant_id=data["tenant"]["tenantId"])
 
+        self._truth = truth
         for subject in data["subjects"]:
             subject_ref = subject["subjectRef"]
             for system_id, expected in subject.get("placement", {}).items():
@@ -429,11 +451,36 @@ class FixtureGenerator:
             except ClientError as error:
                 if error.response["Error"]["Code"] != "AlreadyExistsException":
                     raise
-        if expected.get("suppressionEntries"):
-            ses.put_suppressed_destination(EmailAddress=address, Reason="COMPLAINT")
+        suppressed = expected.get("suppressionEntries", 0)
+        if suppressed:
+            try:
+                ses.put_suppressed_destination(EmailAddress=address, Reason="COMPLAINT")
+            except ClientError as error:
+                if not _is_ses_sandbox(error):
+                    raise
+                if not self._allow_ses_sandbox:
+                    raise SesSandboxError(
+                        "SES is in the sandbox, so PutSuppressedDestination is refused and "
+                        "the suppression entry cannot be seeded. notify-suppression is "
+                        "invariant 7's worked example — without the entry it returns "
+                        "APPLIED rather than PARTIAL, and the residual archetype is not "
+                        "demonstrated.\n"
+                        "  Fix properly: request SES production access (AWS console -> SES "
+                        "-> Account dashboard -> Request production access).\n"
+                        "  Proceed without it: `make seed ALLOW_SES_SANDBOX=1`, which "
+                        "records the gap in the ground-truth map."
+                    ) from error
+                self._truth.degraded.append(
+                    "notify-suppression: SES sandbox refused PutSuppressedDestination, so "
+                    "no suppression entry exists and hard_delete will return APPLIED "
+                    "instead of PARTIAL. The RESIDUAL_BY_DESIGN archetype is NOT "
+                    "demonstrated in this environment."
+                )
+                suppressed = 0
+
         return {
             "contacts": expected.get("contacts", 0),
-            "suppressionEntries": expected.get("suppressionEntries", 0),
+            "suppressionEntries": suppressed,
         }
 
     # ── plumbing ─────────────────────────────────────────────────────────────────────
@@ -503,6 +550,12 @@ def _safe_handle(subject_ref: str) -> str:
             "interpolate it into a statement"
         )
     return subject_ref
+
+
+def _is_ses_sandbox(error: ClientError) -> bool:
+    """SES reports the sandbox as a generic BadRequestException, so the message is the
+    only signal. Narrow on purpose: any other BadRequest is a real defect."""
+    return "sandbox" in str(error).lower()
 
 
 def _purge_versions(s3: Any, bucket: str, prefix: str) -> int:

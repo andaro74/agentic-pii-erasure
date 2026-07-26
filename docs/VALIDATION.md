@@ -634,6 +634,38 @@ guards are mutation-tested: reinstating `IF NOT EXISTS` fails, and widening the
 already-exists catch to swallow everything fails too — the latter matters because a broad
 catch would turn a genuine DDL error into a silent no-op, which is V8-9 again, self-inflicted.
 
+### 2026-07-26 · V8-11 — the residual archetype needs an account capability nobody checked
+
+`make seed` reached SES and failed with `Your account is still in the sandbox.`
+
+| ID | Severity | Finding | Resolution |
+|---|---|---|---|
+| V8-11 | **Medium** | **`PutSuppressedDestination` is refused for accounts without SES production access**, which every new AWS account lacks. `notify-suppression` is invariant 7's worked example: with no suppression entry it has nothing to retain, so `hard_delete` returns `APPLIED` rather than `PARTIAL` and the RESIDUAL_BY_DESIGN archetype is not demonstrated at all. Nothing in the repo named this as a prerequisite. | **Fixed three ways.** `make preflight` reports sandbox status up front (`GetAccount.ProductionAccessEnabled`, a boolean). `make seed` **fails by default** with the remedy. `make seed ALLOW_SES_SANDBOX=1` proceeds and writes a `degraded` block into the ground-truth map naming exactly what is missing. |
+
+**Why not simply skip it.** Silently omitting the entry would leave a seed that looks
+complete, a `notify-suppression` that returns `APPLIED`, and a reader concluding the
+residual archetype works — while the one artifact it exists to demonstrate was never
+created. That is a worse outcome than a hard failure, and it is the same shape as baseline
+finding #4: a fixture that cannot fail because the thing it grades was quietly removed.
+
+**Why not simply block.** Production access is an AWS support request that can take a day.
+Refusing to seed seven working participants because the eighth needs a capability the
+account does not yet have would be disproportionate.
+
+So the degradation is **explicit, opt-in, and recorded in the artifact itself** rather than
+only in a log line the operator may not have kept. A later reader of `ground-truth.json`
+sees the gap without having to remember the run. Both properties are mutation-tested:
+removing the `degraded` record fails, and widening the sandbox match to swallow any
+`BadRequestException` fails too — the match is on the message, because SES reports the
+sandbox through a generic error code, and a broad catch would absorb real defects.
+
+**The pattern this completes.** `make preflight` now checks two things the hermetic gate
+cannot know — a regional engine version (V8-5) and an account capability (V8-11). Both are
+facts about *the environment*, not about the repository, and both previously surfaced only
+after a slow, expensive operation had begun. That is the category the preflight target
+exists for, and it is worth extending whenever a deployed gate fails for a reason
+`make check` could never have held an opinion about.
+
 1. Read a doc claim as an adversary: *what would make this false, and could the
    named control detect it?*
 2. If the control can't go red, that's a finding — record it here with the fix and

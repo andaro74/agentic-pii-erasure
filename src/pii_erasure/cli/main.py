@@ -75,6 +75,13 @@ def seed(
         bool,
         typer.Option("--dry-run", help="Print the plan and declared placement; write nothing."),
     ] = False,
+    allow_ses_sandbox: Annotated[
+        bool,
+        typer.Option(
+            "--allow-ses-sandbox",
+            help="Seed without the SES suppression entry, recording the gap in the map.",
+        ),
+    ] = False,
     out: Annotated[
         Path, typer.Option("--out", help="Where the generated placement map is written.")
     ] = Path("evals/fixtures/ground-truth.json"),
@@ -116,7 +123,11 @@ def seed(
         _console.print("[dim]--dry-run: nothing was written[/dim]")
         return
 
-    generator = FixtureGenerator(clients=_seed_clients(), config=_stack_config(declared))
+    generator = FixtureGenerator(
+        clients=_seed_clients(),
+        config=_stack_config(declared),
+        allow_ses_sandbox=allow_ses_sandbox,
+    )
     truth = generator.run(seeds)
 
     # A declared placement that produced no write would become an invisible recall miss
@@ -130,6 +141,10 @@ def seed(
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(truth.to_json(), indent=2, sort_keys=True), encoding="utf-8")
     _console.print(f"✅ seeded {len(truth.subjects)} subjects · ground truth → {out}")
+    for note in truth.degraded:
+        # Printed as well as recorded. A degradation the operator never saw is a
+        # degradation they will later mistake for a defect in the agent.
+        _console.print(f"[yellow]⚠ degraded[/yellow] {note}")
 
 
 @app.command()
