@@ -239,6 +239,9 @@ tests/
 │                   canonicalisation schemaVersion. Changing a rule turns these
 │                   red rather than silently re-digesting outstanding approvals.
 ├── conformance/    parameterised over the registry — 5 verbs × 8 participants  [needs AWS]
+│                   Seeds its own throwaway subject per case; participants whose
+│                   milestone has not landed skip with a reason and become
+│                   mandatory automatically when their function appears.
 └── integration/    full saga; chaos; compensation; resurrection; upgrade canary [needs AWS]
 ```
 

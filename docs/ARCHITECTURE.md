@@ -195,7 +195,13 @@ subject.hard_delete   → irreversible. Purge or crypto-shred.
 subject.verify        → read-only assertion. Must return zero artifacts.
 ```
 
-Each participant is **one Lambda function registered as an AgentCore Gateway target**. The Gateway converts the Lambda's declared schema into MCP tools, so the agent sees a single MCP endpoint and never learns that there are eight backends — which is the point, because a tool surface that grows with participant count degrades tool-selection accuracy, and that attacks the one metric that must not move (§11).
+Each participant is **one Lambda function registered as an AgentCore Gateway target**. The Gateway converts the Lambda's declared schema into MCP tools, so the agent speaks one protocol to one endpoint over one auth path instead of learning eight SDKs.
+
+> **Corrected at M2, on the record.** This section previously claimed the agent "never learns that there are eight backends" and that the tool surface stays **O(1) in participant count**. Building it showed that per-participant targets cannot deliver that: AgentCore Gateway publishes each tool under `${target_name}___${tool_name}`, so eight targets present **forty** tools whose names name the backends. The claim described an intention the chosen mechanism does not provide.
+>
+> What survives is real and is the reason the Gateway is still the right shape: one endpoint, one protocol, one authorization point, and — because `PartiallyAuthorizeActions` filters per identity (§9.1) — a discovery identity that sees only the two read-only verbs per target rather than all five. What does not survive is the O(1) claim. The tool surface is **O(5N)** for a fully-privileged caller and **O(2N)** for discovery.
+>
+> Consolidating to a single routing target would restore O(1) at the cost of a Lambda holding the union of every participant's permissions, which trades a tool-selection concern for a blast-radius one; §9.3's one-role-per-participant separation is worth more. If tool-selection accuracy degrades measurably at eight participants, M7's eval is where that shows up, and it is the point at which this decision gets revisited with evidence rather than pre-emptively. Recorded as V5-1 in [VALIDATION.md](VALIDATION.md).
 
 ### 4.1 Tool schemas
 

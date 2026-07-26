@@ -14,6 +14,8 @@ import os
 
 from aws_cdk import App
 from stacks.foundation import FoundationStack
+from stacks.gateway import GatewayStack
+from stacks.participants import ParticipantsStack
 
 app = App()
 
@@ -30,11 +32,30 @@ object_lock_days: int = (
     else int(os.environ.get("PII_ERASURE_DEV_OBJECT_LOCK_DAYS", "1"))
 )
 
-FoundationStack(
+foundation = FoundationStack(
     app,
     f"asdp-{stage}-foundation",
     stage=stage,
     object_lock_days=object_lock_days,
+)
+
+participants = ParticipantsStack(
+    app,
+    f"asdp-{stage}-participants",
+    stage=stage,
+    object_lock_days=object_lock_days,
+    dek_registry=foundation.dek_registry,
+    idempotency=foundation.idempotency,
+)
+
+GatewayStack(
+    app,
+    f"asdp-{stage}-gateway",
+    stage=stage,
+    participants={
+        "upload-bucket": participants.upload_bucket_fn,
+        "compliance-archive": participants.archive_fn,
+    },
 )
 
 app.synth()

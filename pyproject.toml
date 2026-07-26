@@ -102,6 +102,11 @@ module = [
   "cedarpy.*",
   "aws_cdk.*",
   "constructs.*",
+  # boto3/botocore ship no py.typed. Typing the AWS surface here would mean
+  # hand-maintaining stubs for eight services; the participants isolate every call
+  # behind a contract model instead, so the untyped edge is one function deep.
+  "boto3.*",
+  "botocore.*",
 ]
 ignore_missing_imports = true
 

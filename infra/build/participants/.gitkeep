@@ -1,0 +1,7 @@
+Staging directory for the participant Lambda asset.
+
+`make package` fills this with pii_erasure/ and its runtime dependencies, built for
+Lambda's manylinux platform rather than the host's. It is committed EMPTY on purpose:
+`cdk synth` is part of the hermetic gate, and Code.from_asset must resolve with no build
+step, no Docker, and no network. A deploy from an unpopulated directory would produce a
+function that imports nothing — which is why `make deploy-dev` depends on `make package`.

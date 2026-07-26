@@ -211,6 +211,29 @@ The generalisation worth keeping: **V4-1 was found by walking the documented pat
 asking what else shares its shape.** The first needs a human on a clean machine; the second
 is a fifteen-line parser. Both are cheaper than the deploy that goes to the wrong region.
 
+### 2026-07-26 · M2 — building the Gateway contradicted a documented claim
+
+Not found by reading. Found by reading the AgentCore developer guide closely enough to
+write the target configuration, which is a different activity from re-reading our own
+docs and reaches a different class of defect.
+
+| ID | Severity | Finding | Resolution |
+|---|---|---|---|
+| V5-1 | **High** | **An architectural claim the chosen mechanism cannot deliver.** ARCHITECTURE §4 stated that the agent "never learns that there are eight backends" and that the tool surface stays **O(1) in participant count** — and justified it as protecting tool-selection accuracy, which protects recall, which is invariant 8. AgentCore Gateway publishes every tool as `${target_name}___${tool_name}`. With one target per participant (which §4 also mandates, two sentences earlier), eight participants publish **forty** tools whose names enumerate the backends. The two sentences could not both be true, and the false one was load-bearing for a claim about the metric that must not move. | **Corrected on the record, not deleted.** §4 now states what the Gateway actually provides — one endpoint, one protocol, one authorization point, and per-identity tool filtering that keeps a discovery identity to `O(2N)` rather than `O(5N)` — and states plainly that O(1) is not among them. The alternative that would restore it (a single routing target) is described together with its cost: one Lambda holding the union of every participant's permissions, against §9.3's one-role-per-participant separation. Deferred to M7's eval, where tool-selection degradation would actually show up, rather than pre-empted. |
+
+**Why this one is worth the space.** The pattern is the same as V4-1's — a claim whose
+mechanism was never checked — but the checking looked different. V4-1 needed a human to
+walk the documented path; V5-1 needed someone to read the *service's* documentation
+rather than ours. ROADMAP rule 3 ("verify the API shape against current documentation,
+not memory") was written to prevent writing wrong code. It also catches wrong docs.
+
+Also fixed while building, each caught by a tool rather than by review: `cdk synth`'s
+CloudFormation validator rejected an em dash in an IAM role description (the field is
+restricted to printable Latin-1); a `Code.from_asset` path relative to the working
+directory resolved differently under `make synth` (which runs in `infra/`) and under
+pytest (repo root), which fails as "cannot find asset" in whichever you did not try
+first; and `moto` surfaced a corrupted `cffi` wheel in the venv rather than a bug.
+
 1. Read a doc claim as an adversary: *what would make this false, and could the
    named control detect it?*
 2. If the control can't go red, that's a finding — record it here with the fix and

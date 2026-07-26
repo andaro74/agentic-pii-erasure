@@ -132,6 +132,25 @@ check: lint test policy-test synth ## What CI runs on every commit. HERMETIC —
 STAGE ?= $(PII_ERASURE_STAGE)
 RESOLVE_STAGE = stage="$(STAGE)"; stage="$${stage:-$${PII_ERASURE_STAGE:-dev}}"
 
+# Participant Lambda asset. Built for Lambda's platform, not the host's — a pydantic
+# wheel compiled for win_amd64 imports fine here and fails in the runtime. --only-binary
+# is what makes that failure loud at build time instead of at conformance time.
+# No Docker: `cdk synth` stays hermetic, and this target only runs before a deploy.
+LAMBDA_ASSET := infra/build/participants
+LAMBDA_PLATFORM := manylinux2014_x86_64
+LAMBDA_PY := 3.12
+
+.PHONY: package
+package: ## Stage the participant Lambda asset (handler code + deps). Runs before deploy.
+	@rm -rf $(LAMBDA_ASSET) && mkdir -p $(LAMBDA_ASSET)
+	$(PY) -m pip install --quiet --target $(LAMBDA_ASSET) \
+		--platform $(LAMBDA_PLATFORM) --python-version $(LAMBDA_PY) \
+		--implementation cp --only-binary=:all: \
+		"pydantic>=2.9,<3" "structlog>=24.1"
+	@cp -r src/pii_erasure $(LAMBDA_ASSET)/
+	@find $(LAMBDA_ASSET) -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true
+	@echo "✅ staged $(LAMBDA_ASSET) ($$(du -sh $(LAMBDA_ASSET) | cut -f1))"
+
 .PHONY: bootstrap
 bootstrap: ## ⚠️ ONE-TIME per account+region: create the CDK toolkit stack. Human-only.
 	@$(LOAD_ENV); \
@@ -142,7 +161,7 @@ bootstrap: ## ⚠️ ONE-TIME per account+region: create the CDK toolkit stack. 
 	$(CDK) bootstrap "aws://$$acct/$$AWS_REGION"
 
 .PHONY: deploy-dev
-deploy-dev: ## ⚠️ Deploy a dev-shaped stack (STAGE=dev by default). Costs money.
+deploy-dev: package ## ⚠️ Deploy a dev-shaped stack (STAGE=dev by default). Costs money.
 	@$(LOAD_ENV); \
 	$(REQUIRE_REGION); \
 	$(RESOLVE_STAGE); \
@@ -150,7 +169,7 @@ deploy-dev: ## ⚠️ Deploy a dev-shaped stack (STAGE=dev by default). Costs mo
 	cd infra && $(CDK) deploy --all --app '$(CDK_APP)' --context stage="$$stage"
 
 .PHONY: deploy
-deploy: ## ⚠️ Deploy the production-shaped stack. Human-only. (M10)
+deploy: package ## ⚠️ Deploy the production-shaped stack. Human-only. (M10)
 	@$(LOAD_ENV); \
 	$(REQUIRE_REGION); \
 	cd infra && $(CDK) deploy --all --app '$(CDK_APP)' --context stage=prod
