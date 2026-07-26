@@ -53,7 +53,7 @@ There is no local mode ([ADR-017](adr/ADR-017-real-aws-participants.md)), so fro
 
 **Traps:** invariant 4. Any later change to canonicalisation is a breaking change requiring a `schemaVersion` bump and a fixture. The rules that landed are a *documented subset* of RFC 8785 — [ADR-022](adr/ADR-022-canonical-json-subset.md). Get the property-style tests in *now* — [ADR-006](adr/ADR-006-approval-binds-to-digest.md)'s digest binding is only as strong as this file.
 
-## - [ ] M2 · Participant harness + the two hardest participants + conformance
+## - [x] M2 · Participant harness + the two hardest participants + conformance
 
 **Goal:** prove the five-verb contract against two real AWS services — one that lies about deletion, and one that cannot delete at all.
 
