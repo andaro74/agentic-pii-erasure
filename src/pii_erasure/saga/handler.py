@@ -11,6 +11,16 @@ Two actions:
   then); scheduler wakes arrive via `scheduler/handler.py`, which adds stale-wake
   filtering and delivery dedup on top of this same graph.
 
+**A resume is validated against the current gate before it is delivered** (V9-3).
+LangGraph persists a `Command(resume=…)` value against the pending interrupt *before*
+the node consumes it, so a wrong-shaped resume does not merely fail once: the bad
+value is stored, and every subsequent legitimate resume replays it and fails
+identically. A duplicate approval arriving after the saga has moved on to the grace
+or sweep gate would wedge a live erasure request past a statutory deadline — no
+credentials required beyond the ability to call this function once. So a mismatched
+resume is REFUSED without touching the graph, which is the same defence
+`scheduler/handler.py` applies to wake reasons, at the other entry point.
+
 `durability="sync"` everywhere: the checkpoint is written before the next step runs.
 It is the system of record, and "the state that would have been written" is not state.
 
@@ -24,6 +34,7 @@ from typing import Any
 
 from langgraph.types import Command
 
+from pii_erasure.approval.gate import GATE_APPROVAL, GATE_GRACE, GATE_STUCK, GATE_SWEEP
 from pii_erasure.observability.logging import configure_logging, get_logger
 from pii_erasure.saga.graph import production_graph
 
@@ -32,9 +43,33 @@ _log = get_logger(__name__)
 
 _START_FIELDS = ("saga_id", "subject_ref", "request_id", "tenant_id")
 
+#: The key each gate's resume value must carry. A gate absent from this map accepts
+#: nothing — an unknown gate is a new pause someone added without deciding what may
+#: legitimately resume it, and guessing on its behalf is how the wedge gets back in.
+_GATE_RESUME_KEY: dict[str, str] = {
+    GATE_APPROVAL: "decision",
+    GATE_GRACE: "wake_reason",
+    GATE_SWEEP: "wake_reason",
+    GATE_STUCK: "wake_reason",
+}
+
 
 class SagaRequestError(ValueError):
     """The invocation event is not a valid start or resume."""
+
+
+def _answers_gate(gate: str, resume_value: Any) -> bool:
+    """Is this resume value an answer to the question the saga is actually asking?
+
+    Shape only — whether the *content* is acceptable (a digest that matches, a wake
+    the gate expects) stays with the node that asked, which is where the domain rules
+    and their ledger entries live. This check exists solely to keep a payload meant
+    for a different gate from ever being persisted against this one.
+    """
+    required = _GATE_RESUME_KEY.get(gate)
+    if required is None:
+        return False
+    return isinstance(resume_value, dict) and required in resume_value
 
 
 def _config(thread_id: str) -> dict[str, Any]:
@@ -72,10 +107,20 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     if action == "resume":
         thread_id = str(event["thread_id"])
         config = _config(thread_id)
-        if not graph.get_state(config).interrupts:
+        interrupts = graph.get_state(config).interrupts
+        if not interrupts:
             _log.warning("resume_refused_not_paused", thread_id=thread_id)
             return {"thread_id": thread_id, "status": "not_paused"}
-        result = graph.invoke(Command(resume=event.get("resume")), config, durability="sync")
+
+        resume_value = event.get("resume")
+        gate = str((interrupts[0].value or {}).get("gate", ""))
+        if not _answers_gate(gate, resume_value):
+            # Refused, not raised, and above all NOT delivered: reaching the graph is
+            # what persists the value and wedges the thread (V9-3).
+            _log.warning("resume_rejected", thread_id=thread_id, gate=gate)
+            return {"thread_id": thread_id, "status": "resume_rejected", "gate": gate}
+
+        result = graph.invoke(Command(resume=resume_value), config, durability="sync")
         return _summary(thread_id, result)
 
     raise SagaRequestError(f"unknown action {action!r}")

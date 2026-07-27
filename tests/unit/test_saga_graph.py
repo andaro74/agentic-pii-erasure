@@ -237,6 +237,7 @@ class Rig:
 
     def approve(self, paused: dict[str, Any]) -> dict[str, Any]:
         digest = paused["__interrupt__"][0].value["manifestDigest"]
+        self.digest = digest
         return self.resume({"decision": "approve", "digest": digest, "approver": "unit-approver"})
 
 
@@ -521,3 +522,81 @@ def test_handler_resume_refuses_a_thread_that_is_not_paused(
     handler = _patched_handler(monkeypatch, rig)
     result = handler({"action": "resume", "thread_id": "saga_missing", "resume": {}}, None)
     assert result["status"] == "not_paused"
+
+
+def test_a_resume_shaped_for_another_gate_is_refused_without_wedging_the_saga(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stray resume must not poison a paused saga (V9-3).
+
+    LangGraph persists a `Command(resume=…)` value against the pending interrupt
+    *before* the node consumes it. So a wrong-shaped resume — a duplicate approval
+    arriving after the saga has moved on to the sweep gate — does not merely fail
+    once: the bad value is stored, and every subsequent LEGITIMATE resume replays it
+    and fails identically. A live erasure request would be wedged past a statutory
+    deadline by any caller that sent one stale payload.
+
+    The executor therefore validates the resume against the current gate BEFORE
+    delivering it, the same defence `scheduler/handler.py` applies to wake reasons.
+    """
+    rig = Rig()
+    handler = _patched_handler(monkeypatch, rig)
+    paused = rig.start()
+    at_sweep = rig.approve(paused)
+    assert at_sweep["__interrupt__"][0].value["gate"] == "sweep"
+
+    stray = handler(
+        {
+            "action": "resume",
+            "thread_id": rig.saga_id,
+            "resume": {"decision": "approve", "digest": rig.digest, "approver": "dup"},
+        },
+        None,
+    )
+    assert stray["status"] == "resume_rejected"
+    assert stray["gate"] == "sweep"
+
+    # The saga must still be resumable by the wake it is actually waiting for.
+    resumed = handler(
+        {"action": "resume", "thread_id": rig.saga_id, "resume": {"wake_reason": "sweep_t7"}},
+        None,
+    )
+    assert resumed["status"] == "paused"
+    final = handler(
+        {"action": "resume", "thread_id": rig.saga_id, "resume": {"wake_reason": "sweep_t30"}},
+        None,
+    )
+    assert final["status"] == STATUS_COMPLETED
+
+
+def test_a_wake_shaped_resume_is_refused_at_the_approval_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The map is checked both ways: a scheduler-shaped payload is not an approval."""
+    rig = Rig()
+    handler = _patched_handler(monkeypatch, rig)
+    paused = rig.start()
+    assert paused["__interrupt__"][0].value["gate"] == "approval"
+
+    stray = handler(
+        {"action": "resume", "thread_id": rig.saga_id, "resume": {"wake_reason": "sweep_t7"}},
+        None,
+    )
+    assert stray["status"] == "resume_rejected"
+    assert rig.participants.tools_called("hard_delete") == []
+
+    # Still approvable afterwards — the refusal cost the saga nothing.
+    approved = rig.approve(paused)
+    assert approved["__interrupt__"][0].value["gate"] == "sweep"
+
+
+def test_an_unknown_gate_accepts_no_resume_at_all() -> None:
+    """A pause someone adds without deciding what may resume it must default closed."""
+    from pii_erasure.saga.handler import _answers_gate
+
+    assert not _answers_gate("some_new_gate", {"decision": "approve"})
+    assert not _answers_gate("", {"wake_reason": "sweep_t7"})
+    assert not _answers_gate("approval", "a string, not a mapping")
+    assert not _answers_gate("approval", None)
+    assert _answers_gate("approval", {"decision": "deny"})
+    assert _answers_gate("sweep", {"wake_reason": "sweep_t7"})

@@ -113,13 +113,6 @@ def _invoke(client: Any, function: str, payload: dict[str, Any]) -> dict[str, An
     return dict(body)
 
 
-def _invoke_expect_error(client: Any, function: str, payload: dict[str, Any]) -> dict[str, Any]:
-    response = client.invoke(FunctionName=function, Payload=json.dumps(payload).encode())
-    body = json.loads(response["Payload"].read())
-    assert "FunctionError" in response, f"expected a function error, got: {body}"
-    return dict(body)
-
-
 def _seed(rig: Any, handle: str, system_ids: tuple[str, ...]) -> None:
     module, generator, _config = rig
     throwaway = {
@@ -221,9 +214,10 @@ def test_happy_path_pause_approve_resume_to_certified_clean(
     assert approved["status"] == "paused", approved
     assert approved["gate"] == "sweep", approved
 
-    # A duplicate approval must not re-run anything: the saga is paused at the sweep
-    # gate, which rejects an answer to a question it never asked.
-    _invoke_expect_error(
+    # A duplicate approval must not re-run anything AND must not wedge the saga: the
+    # thread is paused at the sweep gate, which never asked an approval question, so
+    # the executor refuses the payload without letting it reach the graph (V9-3).
+    stray = _invoke(
         lambda_client,
         _EXECUTOR,
         {
@@ -232,6 +226,8 @@ def test_happy_path_pause_approve_resume_to_certified_clean(
             "resume": {"decision": "approve", "digest": digest, "approver": "dup"},
         },
     )
+    assert stray["status"] == "resume_rejected", stray
+    assert stray["gate"] == "sweep", stray
 
     final = _run_sweeps_to_completion(lambda_client, saga_id)
     assert final["status"] == "completed", final

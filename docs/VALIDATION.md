@@ -791,6 +791,33 @@ asset, so the V7-2 staleness hashes are unchanged — confirmed by rebuilding an
 to the same `d576d6ad…`. A fix that required a redeploy to verify a *test harness* change
 would be its own smell.
 
+| ID | Severity | Finding | Resolution |
+|---|---|---|---|
+| **V9-3** | **High** | **A single stale resume payload could wedge a live saga permanently.** LangGraph persists a `Command(resume=…)` value against the pending interrupt *before* the node consumes it. The executor's `resume` action checked only "is this thread paused?", so a payload meant for a different gate — a duplicate approval arriving after the saga had moved on to the grace or sweep gate — was delivered, stored, and then **replayed by every subsequent legitimate resume**, each failing identically with `sweep resumed with None, expected 'sweep_t7'`. The saga could not be advanced again by any means. Found by the deployed gate: `make integration`'s happy path sent exactly such a duplicate to prove it was rejected, and the rejection wedged the run. | The executor validates a resume against the current gate's shape **before** delivering it, and REFUSES (`status: "resume_rejected"`) without touching the graph — the same defence `scheduler/handler.py` already applied to wake reasons, now at the other entry point. Unknown gates default closed. Guarded by three tests in `tests/unit/test_saga_graph.py`, mutation-tested. |
+
+**This is the most serious finding of the session, and the deployed gate is what surfaced
+it.** Every hermetic test resumed a saga *correctly*, so nothing hermetic could see it; the
+defect lived entirely in what happens when a caller sends the wrong thing at the wrong
+moment. Availability is a compliance property here, not merely an operational one: a
+wedged saga is an erasure request that silently stops progressing, and the deadline it
+misses is statutory. §12's failure-mode matrix treats "stranded mid-window" as the
+expensive failure precisely because nothing about it raises an alarm on its own.
+
+**Why the fix belongs at the handler, not the node.** Once a value reaches the graph it is
+already persisted; a node that raises on a bad resume cannot un-store it. So the node keeps
+the *domain* rules — a digest that must match, a wake the gate expects, each with its own
+ledger entry — and the handler enforces only the *shape*: is this an answer to the question
+being asked? That split is the same one `participants/_base/handler.py` draws with its
+`_precheck`, which refuses a malformed mutation before parsing rather than after.
+
+**Default closed on unknown gates.** `_answers_gate` returns False for any gate not in the
+map, so a future `interrupt()` added without deciding what may legitimately resume it
+refuses everything rather than accepting anything. The failure mode of the wrong default
+here is exactly the wedge this finding is about.
+
+**Mutation-tested**: replacing the check with `return True` reproduces the production error
+(`sweep resumed with None`) in the hermetic reproduction, and reverting restores green.
+
 1. Read a doc claim as an adversary: *what would make this false, and could the
    named control detect it?*
 2. If the control can't go red, that's a finding — record it here with the fix and

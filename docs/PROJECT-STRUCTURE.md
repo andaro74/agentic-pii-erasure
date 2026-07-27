@@ -114,7 +114,9 @@ The system of record. This is where [ADR-016](adr/ADR-016-serverless-durability.
 
 ```
 saga/
-├── handler.py          ⚠️ Lambda entrypoint — drives the graph to the next interrupt or END
+├── handler.py          ⚠️ Lambda entrypoint — drives the graph to the next interrupt or END;
+│                       refuses a resume shaped for a different gate before it reaches the
+│                       graph, because a delivered value is a persisted one (V9-3)
 ├── graph.py            StateGraph assembly, compile(checkpointer=…)
 ├── state.py            TypedDict state schema + reducers      ← correctness surface
 ├── edges.py            conditional routing between phases — declarative path maps
