@@ -444,3 +444,58 @@ def test_a_write_that_lands_short_is_refused_rather_than_recorded(
 
     with pytest.raises(gen.ConsistencyTimeoutError, match="refusing to record"):
         generator.run(seeds)
+
+
+# ─── writers are callable outside run() (V9-2) ────────────────────────────────────────
+
+
+def test_a_writer_works_when_called_directly_on_the_sandbox_path(
+    rig: tuple[FixtureGenerator, dict[str, Any]],
+) -> None:
+    """`_writers()` is a reuse seam, and it must not depend on `run()` having gone first.
+
+    The conformance and integration suites both seed by calling individual writers — the
+    same proven code path `make seed` uses, rather than a second implementation. The
+    degraded branch recorded its message on state that only `run()` established, so a
+    writer that worked through `run()` raised `AttributeError` when called directly. A
+    writer that works or crashes depending on how the caller arrived is a trap for the
+    next caller, and this is the branch that only fires in a sandbox account — the
+    environment the deployed gate actually runs in.
+    """
+    _, clients = rig
+    _sandbox(clients)
+    generator = FixtureGenerator(clients=clients, config=_CONFIG, allow_ses_sandbox=True)
+
+    written = generator._writers()["notify-suppression"](
+        {
+            "subjectRef": "sub_direct_call",
+            "displayName": "Direct Call",
+            "email": "sub_direct_call@meridian.invalid",
+        },
+        {"contacts": 1, "suppressionEntries": 1},
+    )
+
+    assert written == {"contacts": 1, "suppressionEntries": 0}
+    assert generator._degraded, "the gap must be recorded even outside a run()"
+    assert "RESIDUAL_BY_DESIGN" in generator._degraded[0]
+
+
+def test_degradations_are_recorded_once_not_once_per_subject(
+    rig: tuple[FixtureGenerator, dict[str, Any]],
+) -> None:
+    """One missing capability is one gap. A map listing it seven times reads as seven."""
+    _, clients = rig
+    _sandbox(clients)
+    generator = FixtureGenerator(clients=clients, config=_CONFIG, allow_ses_sandbox=True)
+
+    for n in range(3):
+        generator._writers()["notify-suppression"](
+            {
+                "subjectRef": f"sub_direct_{n}",
+                "displayName": "Direct Call",
+                "email": f"sub_direct_{n}@meridian.invalid",
+            },
+            {"contacts": 1, "suppressionEntries": 1},
+        )
+
+    assert len(generator._degraded) == 1

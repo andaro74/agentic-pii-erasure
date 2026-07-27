@@ -768,6 +768,29 @@ demonstrated, since this session had one platform available.
 and removing the strip step from the Makefile fails the recipe check. Reverting each
 restores green.
 
+| ID | Severity | Finding | Resolution |
+|---|---|---|---|
+| **V9-2** | **Medium** | `FixtureGenerator._writers()` is a documented reuse seam — the conformance and integration suites both seed by calling individual writers, deliberately reusing the code path `make seed` proves rather than writing a second implementation. But the notify-suppression writer's **degraded branch** appended to `self._truth`, which only `run()` ever assigned. A writer that worked when reached through `run()` raised `AttributeError: 'FixtureGenerator' object has no attribute '_truth'` when called directly — and only on the SES-sandbox path, which is the environment the deployed gate actually runs in. Two of M5's four integration scenarios errored in fixture setup. | Degradations are now the generator's own state, initialised in `__init__` and copied into the `GroundTruth` by `run()`, via a `_record_degraded()` helper that also deduplicates (one missing capability is one gap, not one per subject). Guarded by two tests in `tests/unit/test_seed_idempotency.py` that call the writer **directly** on the sandbox path. |
+
+**The shape: an object that was only valid halfway through its own lifecycle.** Nothing
+about the writer's signature said "call `run()` first", and the happy path never needed it —
+only the branch that fires when a capability is missing. That is the worst possible place
+for a latent dependency, because it is the branch that runs least often in development and
+most often in the environments people actually deploy into. The fix is not "document the
+ordering"; it is to make the object valid from construction, so the seam is safe for the
+next caller who has not read `run()`.
+
+**Why the guard calls the writer directly.** The existing sandbox tests all drove
+`generator.run(SEEDS)`, so every one of them passed while the direct-call path was broken —
+the tests and the defect were on opposite sides of the same seam. Mutation-tested by
+restoring the `self._truth` form: the two new direct-call tests fail with the same
+`AttributeError` the deployed gate produced, and reverting restores green.
+
+**No redeploy is needed to clear it.** `evals/` is test-side code and never enters a Lambda
+asset, so the V7-2 staleness hashes are unchanged — confirmed by rebuilding and re-synthing
+to the same `d576d6ad…`. A fix that required a redeploy to verify a *test harness* change
+would be its own smell.
+
 1. Read a doc claim as an adversary: *what would make this false, and could the
    named control detect it?*
 2. If the control can't go red, that's a finding — record it here with the fix and

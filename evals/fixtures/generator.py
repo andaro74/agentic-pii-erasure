@@ -180,6 +180,13 @@ class FixtureGenerator:
         self._allow_ses_sandbox = allow_ses_sandbox
         self._schema_applied = False
         self._table_applied = False
+        #: Capabilities this environment could not provide, accumulated as writers hit
+        #: them. Established HERE, not in `run()`, because `_writers()` is a reuse seam:
+        #: the conformance and integration suites call individual writers directly, and
+        #: a writer that works or crashes depending on whether the caller came through
+        #: `run()` is a trap for the next caller (V9-2). `run()` copies these into the
+        #: GroundTruth it returns.
+        self._degraded: list[str] = []
 
     # ── the pass ─────────────────────────────────────────────────────────────────────
 
@@ -187,7 +194,6 @@ class FixtureGenerator:
         data = seeds if seeds is not None else load_seeds()
         truth = GroundTruth(tenant_id=data["tenant"]["tenantId"])
 
-        self._truth = truth
         for subject in data["subjects"]:
             subject_ref = subject["subjectRef"]
             for system_id, expected in subject.get("placement", {}).items():
@@ -199,7 +205,14 @@ class FixtureGenerator:
                     )
                 written = writer(subject, expected)
                 truth.record(subject_ref, Placement(system_id=system_id, artifacts=written))
+        truth.degraded.extend(self._degraded)
         return truth
+
+    def _record_degraded(self, message: str) -> None:
+        """Note a capability this environment lacks. Deduplicated: the same gap hit by
+        seven subjects is one gap, and a map listing it seven times reads as seven."""
+        if message not in self._degraded:
+            self._degraded.append(message)
 
     def _writers(self) -> dict[str, Callable[[dict[str, Any], dict[str, int]], dict[str, int]]]:
         return {
@@ -510,7 +523,7 @@ class FixtureGenerator:
                         "  Proceed without it: `make seed ALLOW_SES_SANDBOX=1`, which "
                         "records the gap in the ground-truth map."
                     ) from error
-                self._truth.degraded.append(
+                self._record_degraded(
                     "notify-suppression: SES sandbox refused PutSuppressedDestination, so "
                     "no suppression entry exists and hard_delete will return APPLIED "
                     "instead of PARTIAL. The RESIDUAL_BY_DESIGN archetype is NOT "

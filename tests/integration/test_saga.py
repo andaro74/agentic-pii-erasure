@@ -37,6 +37,7 @@ import json
 import os
 import time
 import uuid
+import warnings
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -129,6 +130,14 @@ def _seed(rig: Any, handle: str, system_ids: tuple[str, ...]) -> None:
     writers = generator._writers()
     for system_id in system_ids:
         writers[system_id](throwaway, module.PLACEMENTS[system_id])
+
+    # Surface a degraded environment rather than absorbing it. In an SES-sandbox
+    # account the suppression entry cannot be seeded, so notify-suppression returns
+    # APPLIED instead of PARTIAL and the RESIDUAL_BY_DESIGN archetype is not
+    # exercised. The saga arc itself is unaffected — clean is always an acceptable
+    # verify — but a reader of a green run deserves to know which claim went untested.
+    for gap in generator._degraded:
+        warnings.warn(f"degraded environment: {gap}", stacklevel=2)
 
 
 def _teardown(rig: Any, handle: str, system_ids: tuple[str, ...]) -> None:
