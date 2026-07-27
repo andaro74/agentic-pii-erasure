@@ -76,3 +76,51 @@ def test_the_subject_fixture_tears_down() -> None:
     assert fixture_body.index("yield handle") < fixture_body.rindex("_cleanup("), (
         "cleanup must run after the test, in teardown position"
     )
+
+
+# ─── the integration suite must not leak either (V9-4) ────────────────────────────────
+
+INTEGRATION = REPO / "tests" / "integration" / "test_saga.py"
+
+
+def test_the_integration_suite_seeds_inside_its_teardown_guard() -> None:
+    """A fixture that fails during SETUP must not leave what it already seeded.
+
+    Seeding walks the systems in order, so a failure on the seventh leaves six
+    populated. When that happened for real (V9-2's AttributeError fired on
+    notify-suppression, which seeds last), pytest never reached teardown and two
+    subjects' data outlived the run across seven services — V8-13's residue problem
+    returning through a door left open in a different suite.
+
+    The structural fix is that every seed happens inside a block whose exit tears
+    down, so there is no ordering a caller can choose that skips it.
+    """
+    text = INTEGRATION.read_text(encoding="utf-8")
+
+    assert "def _seeded_subject(" in text, (
+        "the integration suite lost its seed-and-teardown context manager — a bare "
+        "_seed() call leaves residue whenever it raises partway (V9-4)"
+    )
+    start = text.index("def _seeded_subject(")
+    body = text[start : text.index("\n@pytest.fixture", start)]
+    assert "finally:" in body, "teardown must run however the block exits, not only on success"
+    # Ordering is the whole claim: `try:` BEFORE `_seed(` BEFORE `finally:`. Checking
+    # only "_seed comes before finally" passes for the defective arrangement too —
+    # a seed hoisted above the try is still textually earlier — which is a guard that
+    # cannot go red, the defect class this file exists to prevent.
+    assert body.index("try:") < body.index("_seed(") < body.index("finally:"), (
+        "seeding must happen INSIDE the try, not before it — a seed that raises "
+        "above the guard leaves everything it already wrote (V9-4)"
+    )
+    assert "_teardown(" in body.split("finally:")[1]
+
+    # And no test may seed outside it: every _seed call belongs to the guard.
+    seeds_outside = [
+        line.strip()
+        for line in text.splitlines()
+        if "_seed(rig" in line and "def " not in line and "_seeded_subject" not in line
+    ]
+    assert len(seeds_outside) == 1, (
+        f"_seed is called outside the teardown guard: {seeds_outside} — every seeded "
+        "subject needs an exit path that removes it"
+    )

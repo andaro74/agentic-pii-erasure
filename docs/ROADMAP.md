@@ -101,17 +101,29 @@ There is no local mode ([ADR-017](adr/ADR-017-real-aws-participants.md)), so fro
 
 **Traps:** invariant 5 — seeded fake PII is treated as real everywhere; that discipline *is* the demo · eventual consistency is real now: the generator must wait on explicit consistency signals (GSI propagation, vector index visibility, Iceberg commit) rather than sleeping · `notify-suppression` must return `PARTIAL` for the retained suppression entry — which holds the **plaintext address**, not a hash (V8-1) — never `APPLIED` · `vector_index` has **no delete-by-query**: derive keys from `subjectRef`, batch at ≤500 per `PutVectors`/`DeleteVectors` call but **≤100 per `GetVectors`** (V8-2), and respect the per-index write ceiling when seeding the corpus · vector metadata is a PII surface and goes through the scrubber.
 
-## - [ ] M5 · The saga (LangGraph core — no model anywhere)
+## - [x] M5 · The saga (LangGraph core — no model anywhere)
 
-> **Hermetic half landed 2026-07-26.** The full graph (11 nodes incl. `compensate`),
-> reducers with concurrent-write tests, digest-bound KMS approval tokens, the
-> hash-chained ledger, EventBridge one-shot scheduling with a stale-wake-filtering +
-> deduplicating resume Lambda, and `infra/stacks/saga.py` (no `bedrock:*`, no VPC —
-> synth-asserted). Phase 3 runs ONE participant per superstep so each receipt
-> checkpoints individually; a stuck participant is DLQ + a pause at the `stuck` gate
-> (the diagram's "manual remediation" arc), never a rollback. Remaining for the tick:
-> `make deploy-dev && make integration` — four scenarios, ~15–25 min, dominated by
-> Athena and the first Aurora resume.
+> **Complete 2026-07-27.** The full graph (11 nodes incl. `compensate`), reducers with
+> concurrent-write tests, digest-bound KMS approval tokens, the hash-chained ledger,
+> EventBridge one-shot scheduling with a stale-wake-filtering + deduplicating resume
+> Lambda, and `infra/stacks/saga.py` (no `bedrock:*`, no VPC — synth-asserted). Phase 3
+> runs ONE participant per superstep so each receipt checkpoints individually; a stuck
+> participant is DLQ + a pause at the `stuck` gate (the diagram's "manual remediation"
+> arc), never a rollback. Deployed gate run by the human: **6 passed in 140s** — all
+> four scenarios plus M3's two, corroborated from outside the saga (tombstone row,
+> verifying ledger chain, `UserNotFoundException`, zero profile items, re-request
+> refused at intake).
+>
+> The gate earned its cost: three runs surfaced three defects `make check` could not
+> reach — a Lambda asset that was not a function of its source (**V9-1**), a generator
+> seam that only worked when entered through `run()` (**V9-2**), and a stray resume
+> that could **wedge a live saga permanently** (**V9-3**). A fourth, residue from a
+> fixture that failed during setup (**V9-4**), was found by inspecting the account
+> afterwards. See [VALIDATION.md](VALIDATION.md).
+>
+> **Untested here, by disclosure:** in an SES-sandbox account the `RESIDUAL_BY_DESIGN`
+> archetype is not exercised (no suppression entry to retain), and the suite warns
+> rather than implying otherwise.
 
 **Goal:** the StateGraph executes a **hand-written fixture manifest** end to end, in Lambda, checkpointed to DynamoDB. [ADR-001](adr/ADR-001-agent-proposes-saga-disposes.md) makes this possible: the saga replays manifests, so it is fully testable before discovery exists. Say that in the article.
 

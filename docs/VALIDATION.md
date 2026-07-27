@@ -818,6 +818,50 @@ here is exactly the wedge this finding is about.
 **Mutation-tested**: replacing the check with `return True` reproduces the production error
 (`sweep resumed with None`) in the hermetic reproduction, and reverting restores green.
 
+| ID | Severity | Finding | Resolution |
+|---|---|---|---|
+| **V9-4** | **Medium** | **A fixture that fails during setup leaves everything it already seeded.** The integration suite seeded eight systems in a loop and only then reached `yield`, so when V9-2's error fired on `notify-suppression` — which seeds **last** — pytest never ran teardown and two subjects' data outlived the run across *seven* services. Found by checking the account after the gate went green, not by any test. | Seeding moved inside a `_seeded_subject` context manager whose `finally` tears down however the block exits, so no ordering skips it; `_teardown` already tolerates absence per system, making a partial unwind the same call as a complete one. The two orphans were removed via the same `_cleanup` path the suite uses. Guarded structurally in `tests/unit/test_conformance_coverage.py`. |
+
+**V8-13 returned through a different door.** That finding closed residue in the
+*conformance* suite by adding fixture teardown; this is the same leak in the *integration*
+suite, arriving through the one path teardown does not cover — failure before `yield`. The
+general form is worth stating: **teardown protects the happy path and the failing test, but
+not the failing setup**, and setup is exactly where a half-built fixture is most likely to
+die.
+
+**The guard's first version could not go red — and that is recorded rather than quietly
+corrected.** It asserted `_seed(` appeared before `finally:`, which is true of the
+*defective* arrangement too, since a seed hoisted above the `try` is still textually
+earlier. The mutation passed. The assertion now pins the actual ordering — `try:` before
+`_seed(` before `finally:` — and the same mutation fails. This is the fourth time in this
+repo a control has been written that described the intention rather than the mechanism; the
+lesson is not "write better assertions" but **always run the mutation**, because a guard
+that has never failed is a guard nobody has tested.
+
+### 2026-07-27 · M5 complete
+
+`make integration`: **6 passed in 140s**, run by the human against the deployed stack —
+2 manifest-signing (M3) plus M5's four scenarios: happy path with pause/approve/resume
+through the real resume Lambda, phase-3 stuck → DLQ → remediated resume with zero duplicate
+applications, phase-2 failure → full compensation, and post-approval digest mismatch →
+abort. Corroborated from outside the saga in the assertions themselves: the tombstone row
+exists, the ledger hash chain verifies end to end, Cognito reports `UserNotFoundException`
+and the profile table returns zero items, and a re-request for the erased subject is
+refused at intake.
+
+**Three deployed-gate runs found three defects that `make check` could not reach** (V9-1,
+V9-2, V9-3), which is the clearest evidence yet for ADR-017's position that a simulation
+only reproduces the behaviours its author already understood. None of the three was a
+logic error in the saga: they were an artifact that was not a function of its source, a
+seam that only worked one way in, and durable state accepting a payload it should have
+refused. All three live in the space between the code and the world it runs in.
+
+**One claim went untested, and the run says so.** In an SES-sandbox account the suppression
+entry cannot be seeded, so `notify-suppression` returns `APPLIED` rather than `PARTIAL` and
+the `RESIDUAL_BY_DESIGN` archetype is not exercised. The suite now emits a warning naming
+that gap rather than letting a green run imply otherwise (invariant 7's honesty applied to
+the test harness). It closes when SES production access lands — no code change.
+
 1. Read a doc claim as an adversary: *what would make this false, and could the
    named control detect it?*
 2. If the control can't go red, that's a finding — record it here with the fix and

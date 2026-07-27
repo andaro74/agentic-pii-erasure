@@ -32,6 +32,7 @@ the same proven code path, not a second implementation.
 
 from __future__ import annotations
 
+import contextlib
 import importlib.util
 import json
 import os
@@ -166,14 +167,30 @@ def _run_sweeps_to_completion(client: Any, thread_id: str) -> dict[str, Any]:
     return result
 
 
+@contextlib.contextmanager
+def _seeded_subject(rig: Any, system_ids: tuple[str, ...]) -> Iterator[str]:
+    """A throwaway subject that is torn down however this block exits — including
+    when SEEDING ITSELF raises partway (V9-4).
+
+    Seeding walks the systems in order, so a failure on the seventh leaves six
+    populated. When that happened during fixture *setup*, pytest never reached the
+    teardown and the residue outlived the run — V8-13's problem returning through a
+    door left open. `_teardown` tolerates absence per system, so unwinding a partial
+    seed is the same call as unwinding a complete one.
+    """
+    handle = f"sub_saga_{uuid.uuid4().hex[:12]}"
+    try:
+        _seed(rig, handle, system_ids)
+        yield handle
+    finally:
+        _teardown(rig, handle, system_ids)
+
+
 @pytest.fixture
 def subject_all_eight(rig: Any) -> Iterator[str]:
-    handle = f"sub_saga_{uuid.uuid4().hex[:12]}"
     module, _generator, _config = rig
-    all_ids = tuple(module.PLACEMENTS)
-    _seed(rig, handle, all_ids)
-    yield handle
-    _teardown(rig, handle, all_ids)
+    with _seeded_subject(rig, tuple(module.PLACEMENTS)) as handle:
+        yield handle
 
 
 # ─── happy path ───────────────────────────────────────────────────────────────────────
@@ -394,10 +411,8 @@ _GHOST = ManifestParticipant(
 
 def test_phase2_failure_compensates_fully(rig: Any, lambda_client: Any) -> None:
     module, generator, config = rig
-    handle = f"sub_saga_{uuid.uuid4().hex[:12]}"
     subset = ("cognito-identity", "profile-store")
-    _seed(rig, handle, subset)
-    try:
+    with _seeded_subject(rig, subset) as handle:
         saga_id = f"saga_{uuid.uuid4().hex[:12]}"
         manifest = build_fixture_manifest(
             saga_id=saga_id,
@@ -442,8 +457,6 @@ def test_phase2_failure_compensates_fully(rig: Any, lambda_client: Any) -> None:
         events = [e.event_type for e in _ledger_events(saga_id)]
         assert "SAGA_COMPENSATED" in events
         assert "HARD_DELETE_APPLIED" not in events
-    finally:
-        _teardown(rig, handle, subset)
 
 
 # ─── post-approval mutation → abort to re-approval ───────────────────────────────────
@@ -451,10 +464,8 @@ def test_phase2_failure_compensates_fully(rig: Any, lambda_client: Any) -> None:
 
 def test_approval_bound_to_a_different_digest_unwinds(rig: Any, lambda_client: Any) -> None:
     _module, generator, config = rig
-    handle = f"sub_saga_{uuid.uuid4().hex[:12]}"
     subset = ("cognito-identity", "profile-store")
-    _seed(rig, handle, subset)
-    try:
+    with _seeded_subject(rig, subset) as handle:
         saga_id = f"saga_{uuid.uuid4().hex[:12]}"
         manifest = build_fixture_manifest(saga_id=saga_id, subject_ref=handle, system_ids=subset)
         # The digest of a DIFFERENT plan — what a TOCTOU attacker would present.
@@ -489,8 +500,6 @@ def test_approval_bound_to_a_different_digest_unwinds(rig: Any, lambda_client: A
             UserPoolId=config["userPoolId"], Username=handle
         )
         assert user["Enabled"] is True
-    finally:
-        _teardown(rig, handle, subset)
 
 
 # ─── helpers ──────────────────────────────────────────────────────────────────────────
