@@ -103,7 +103,11 @@ discovery/
 
 runtime/
 ├── entrypoint.py     AgentCore Runtime HTTP contract (/invocations, /ping)
-└── Dockerfile        the image pushed to ECR and referenced by infra/stacks/runtime.py
+└── (no Dockerfile)   ADR-025: ships as an S3 code zip, arm64 wheels, no ECR.
+                      `cdk synth` runs in `make check`, and a DockerImageAsset
+                      would build at synth time — a Docker daemon inside the
+                      hermetic gate. entrypoint.py serves the contract on the
+                      stdlib, so a unit test can start it in-process.
 ```
 
 Invariant 1 is enforced in three places, each independently sufficient: the tool list asserted read-only in `subgraph.py` at construction with a unit test behind it; the Cedar permit that names only `discover` and `verify`; and Gateway tool-list filtering via `PartiallyAuthorizeActions`, which means the model is never *offered* a mutating tool. Discovery output is a candidate manifest — it mutates nothing, so a discovery failure is always fail-closed.
@@ -221,7 +225,8 @@ infra/
     │                      DEK registry, idempotency) · S3 buckets · EventBridge bus
     ├── participants.py    the 8 real services + their Lambda handlers, one role each
     ├── gateway.py         AgentCore Gateway · targets · Policy attachment · Identity
-    ├── runtime.py         AgentCore Runtime for discovery · ECR image · Memory store
+    ├── runtime.py         AgentCore Runtime for discovery · S3 code zip (ADR-025) ·
+    │                      Memory store · a role with NO participant IAM
     ├── saga.py            saga-executor + resume Lambdas · Scheduler role · SQS DLQ
     ├── api.py             HTTP API + Cognito authorizer for intake, approval, operator reads
     └── observability.py   alarms and dashboards for ARCHITECTURE §10.1

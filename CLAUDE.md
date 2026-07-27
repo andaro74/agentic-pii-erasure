@@ -139,7 +139,8 @@ src/pii_erasure/
   participants/   8 real AWS services, each a Lambda behind an AgentCore Gateway target
     _base/        shared harness — inherit, don't copy the verb plumbing
   discovery/      LangGraph subgraph. Read-only tools only. (Invariant 1)
-  runtime/        AgentCore Runtime entrypoint + container image
+  runtime/        AgentCore Runtime entrypoint (/invocations + /ping). S3 code zip,
+                  not a container — ADR-025
   saga/           LangGraph StateGraph in Lambda — the system of record
     state.py      TypedDict + reducers. (Invariant 10)
     nodes/        deterministic functions. No model client. (Invariant 2)
@@ -189,7 +190,7 @@ make destroy-dev    # tear it down. Do this.
 
 ## AgentCore specifics
 
-- **Runtime** hosts the discovery subgraph as a container with the `/invocations` + `/ping` HTTP contract. Sessions cap at 8 hours async, 15 minutes sync; each gets an isolated microVM. It is the **only** compute permitted to call Bedrock.
+- **Runtime** hosts the discovery subgraph from an **S3 code zip** (arm64, `PYTHON_3_13`) with the `/invocations` + `/ping` HTTP contract — not a container ([ADR-025](docs/adr/ADR-025-runtime-ships-a-code-zip.md)), because `cdk synth` runs inside `make check` and a `DockerImageAsset` would put a Docker daemon in the hermetic gate. Sessions cap at 8 hours async, 15 minutes sync; each gets an isolated microVM. It is the **only** compute permitted to call Bedrock.
 - **Gateway** is the single MCP endpoint. Participants are Lambda targets; the agent never learns there are eight backends. The tool surface stays O(1) in participant count, which protects tool-selection accuracy — and that protects recall.
 - **Policy** evaluates Cedar on every tool call via `AuthorizeAction`, and filters the tool list per identity via `PartiallyAuthorizeActions`. Deny-by-default, forbid-wins. `LOG_ONLY` → `ENFORCING` is a stack parameter, so flipping it lands in CloudTrail.
 - **Identity** provides the workload identities that are the Cedar principals: `asdp-discovery`, `asdp-saga-executor`, `asdp-approval-service`. Distinct from the IAM roles backing them — both layers are required.

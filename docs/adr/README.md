@@ -42,6 +42,7 @@ is a large part of what makes this repo worth reading.
 | [022](ADR-022-canonical-json-subset.md) | Canonical JSON is a documented subset of RFC 8785 | Accepted — refines [006](ADR-006-approval-binds-to-digest.md) |
 | [023](ADR-023-aurora-needs-a-vpc.md) | Aurora needs a VPC; the platform still never enters one | Accepted — clarifies [015](ADR-015-serverless-compute-split.md), [016](ADR-016-serverless-durability.md), [017](ADR-017-real-aws-participants.md) |
 | [024](ADR-024-cedar-expresses-identity-and-shape.md) | Cedar expresses identity and request shape, not business state | Accepted — supersedes the policy set in ARCHITECTURE §9.2, refines [005](ADR-005-cedar-at-gateway.md), [018](ADR-018-agentcore-policy.md) |
+| [025](ADR-025-runtime-ships-a-code-zip.md) | The discovery Runtime ships as an S3 code zip, not a container image | Accepted — supersedes the container artifact implied by ARCHITECTURE §4 and PROJECT-STRUCTURE `runtime/Dockerfile` |
 
 ## The supersession chains
 

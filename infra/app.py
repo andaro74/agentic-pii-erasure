@@ -16,6 +16,7 @@ from aws_cdk import App
 from stacks.foundation import FoundationStack
 from stacks.gateway import GatewayStack
 from stacks.participants import ParticipantsStack
+from stacks.runtime import RuntimeStack
 from stacks.saga import SagaStack
 
 app = App()
@@ -49,6 +50,28 @@ participants = ParticipantsStack(
     idempotency=foundation.idempotency,
 )
 
+
+gateway = GatewayStack(
+    app,
+    f"asdp-{stage}-gateway",
+    stage=stage,
+    # The stack owns this mapping. Listing the participants again here would be a second
+    # place to forget one, and a participant missing from the Gateway is a participant the
+    # agent cannot reach — a recall failure with no error attached.
+    participants=participants.functions,
+)
+
+# The reasoning plane (M7). Takes the Gateway's ARN and URL and nothing else: the
+# Runtime's only route to subject data is through the Gateway, so there is nothing
+# else for it to be handed.
+runtime = RuntimeStack(
+    app,
+    f"asdp-{stage}-runtime",
+    stage=stage,
+    gateway_arn=gateway.gateway.attr_gateway_arn,
+    gateway_url=gateway.gateway.attr_gateway_url,
+)
+
 SagaStack(
     app,
     f"asdp-{stage}-saga",
@@ -60,16 +83,10 @@ SagaStack(
     idempotency=foundation.idempotency,
     signing_key=foundation.signing_key,
     participants=participants.functions,
-)
-
-GatewayStack(
-    app,
-    f"asdp-{stage}-gateway",
-    stage=stage,
-    # The stack owns this mapping. Listing the participants again here would be a second
-    # place to forget one, and a participant missing from the Gateway is a participant the
-    # agent cannot reach — a recall failure with no error attached.
-    participants=participants.functions,
+    # The one AgentCore permission invariant 12 allows the saga: `plan` invokes
+    # this Runtime and receives a manifest. Passed as an exact ARN rather than a
+    # pattern, which is why the runtime stack is constructed first.
+    discovery_runtime_arn=runtime.runtime.attr_agent_runtime_arn,
 )
 
 app.synth()

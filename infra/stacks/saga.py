@@ -63,6 +63,7 @@ class SagaStack(Stack):
         idempotency: dynamodb.ITable,
         signing_key: kms.IKey,
         participants: dict[str, lambda_.IFunction],
+        discovery_runtime_arn: str | None = None,
         **kwargs: object,
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)  # type: ignore[arg-type]
@@ -113,6 +114,8 @@ class SagaStack(Stack):
             "RESUME_FUNCTION_ARN": resume_arn,
             "SCHEDULER_ROLE_ARN": self.scheduler_role.role_arn,
         }
+        if discovery_runtime_arn:
+            environment["DISCOVERY_RUNTIME_ARN"] = discovery_runtime_arn
         if not prod:
             environment["SWEEP_DELAYS_SECONDS"] = _DEV_SWEEP_DELAYS
             environment["APPROVAL_TIMEOUT_SECONDS"] = _DEV_APPROVAL_TIMEOUT
@@ -133,6 +136,26 @@ class SagaStack(Stack):
             environment=environment,
             description="ASDP resume: stale-wake filter + dedup, then Command(resume=...)",
         )
+
+        # ── The saga's ONLY route to the reasoning plane (invariant 12) ─────
+        # One action, one ARN, and on the EXECUTOR ALONE. The resume Lambda replays a
+        # checkpointed manifest and must never re-plan: a fresh manifest after an
+        # approval would execute a plan nobody approved (invariant 3), so withholding
+        # this from the resume role makes that mistake un-makeable rather than
+        # merely uncoded.
+        #
+        # `plan` invokes the Runtime and receives JSON; it holds no model client, and
+        # neither role holds any `bedrock:*`. That distinction is the invariant: "ask
+        # something else to reason and get a plan back" is expressible in IAM;
+        # "reason, but only about plans" is not.
+        if discovery_runtime_arn and self.executor_fn.role is not None:
+            self.executor_fn.role.add_to_principal_policy(
+                iam.PolicyStatement(
+                    sid="PlanNodeInvokesDiscovery",
+                    actions=["bedrock-agentcore:InvokeAgentRuntime"],
+                    resources=[discovery_runtime_arn, f"{discovery_runtime_arn}/*"],
+                )
+            )
 
         for fn in (self.executor_fn, self.resume_fn):
             self._grant_data_plane(

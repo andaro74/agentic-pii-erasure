@@ -157,8 +157,10 @@ def main() -> int:
 
     surface_hidden = tools == []
     denied = _looks_denied(call) or _looks_denied(raw_list)
-    print(f"tools/list  : {len(tools)} tools visible -> {'PASS' if surface_hidden else 'FAIL'}"
-          f" (an unpermitted identity must see an empty surface)")
+    print(
+        f"tools/list  : {len(tools)} tools visible -> {'PASS' if surface_hidden else 'FAIL'}"
+        f" (an unpermitted identity must see an empty surface)"
+    )
     if not surface_hidden:
         print(f"    visible: {sorted(tools)[:6]} ...")
     print(f"hard_delete : {'PASS — denied at the Gateway' if denied else 'FAIL'}")

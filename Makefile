@@ -140,6 +140,14 @@ LAMBDA_ASSET := infra/build/participants
 SAGA_ASSET := infra/build/saga
 LAMBDA_PLATFORM := manylinux2014_x86_64
 LAMBDA_PY := 3.12
+
+# The discovery Runtime asset (M7, ADR-025). AgentCore Runtime is arm64-only and
+# runs Amazon Linux 2023 (glibc 2.34), so manylinux_2_28 is both correct and
+# required: numpy 2.3+ ships no manylinux2014_aarch64 wheel at all.
+RUNTIME_ASSET := infra/build/runtime
+RUNTIME_PLATFORMS := manylinux_2_28_aarch64 manylinux2014_aarch64
+RUNTIME_PY := 3.13
+RUNTIME_ENTRYPOINT := entrypoint.py
 # The saga asset's framework pins MUST match pyproject.toml exactly (invariant 9) —
 # a unit test compares these strings against the pyproject pins verbatim, so a bump
 # that touches only one of the two fails `make check` instead of deploying a Lambda
@@ -147,13 +155,14 @@ LAMBDA_PY := 3.12
 SAGA_PINS := "langgraph==1.2.9" "langgraph-checkpoint-aws==1.2.0"
 
 .PHONY: package
-package: ## Stage both Lambda assets (participants + saga). Runs before deploy.
+package: ## Stage the deploy assets (participants + saga + discovery Runtime).
 	@# Clear the staging dirs but KEEP .gitkeep: it is a tracked file, and an
 	@# `rm -rf` here shows up as a deletion that a careless `git add -A` commits,
 	@# which breaks `cdk synth` for the next person to clone without packaging.
-	@mkdir -p $(LAMBDA_ASSET) $(SAGA_ASSET)
+	@mkdir -p $(LAMBDA_ASSET) $(SAGA_ASSET) $(RUNTIME_ASSET)
 	@find $(LAMBDA_ASSET) -mindepth 1 -maxdepth 1 ! -name .gitkeep -exec rm -rf {} +
 	@find $(SAGA_ASSET) -mindepth 1 -maxdepth 1 ! -name .gitkeep -exec rm -rf {} +
+	@find $(RUNTIME_ASSET) -mindepth 1 -maxdepth 1 ! -name .gitkeep -exec rm -rf {} +
 	$(PY) -m pip install --quiet --target $(LAMBDA_ASSET) \
 		--platform $(LAMBDA_PLATFORM) --python-version $(LAMBDA_PY) \
 		--implementation cp --only-binary=:all: \
@@ -171,6 +180,23 @@ package: ## Stage both Lambda assets (participants + saga). Runs before deploy.
 	@# asset for zero benefit. The saga's own AWS calls run fine on the runtime's.
 	@rm -rf $(SAGA_ASSET)/boto3* $(SAGA_ASSET)/botocore*
 	@cp -r src/pii_erasure $(SAGA_ASSET)/
+	@# ── the discovery Runtime (M7, ADR-025) ──────────────────────────────────
+	@# arm64, because AgentCore Runtime is arm64-only, and manylinux_2_28 because
+	@# numpy 2.3+ (pulled in by langchain-aws) publishes NO manylinux2014_aarch64
+	@# wheel — that tag tops out at numpy 2.2.6. Both tags are passed: pip accepts
+	@# the first that matches, so older pure-arm64 wheels still resolve. This was
+	@# proven with `pip download` before a deploy, not discovered during one.
+	$(PY) -m pip install --quiet --target $(RUNTIME_ASSET) \
+		$(foreach tag,$(RUNTIME_PLATFORMS),--platform $(tag)) \
+		--python-version $(RUNTIME_PY) --implementation cp --only-binary=:all: \
+		-c requirements.lock \
+		"pydantic>=2.9,<3" "structlog>=24.1" $(SAGA_PINS) "langchain>=1.3,<2" "langchain-aws>=1.6,<2"
+	@cp -r src/pii_erasure $(RUNTIME_ASSET)/
+	@# entryPoint is a FILENAME, and filenames are not type-checked (ADR-025 cost 3).
+	@# A rename deploys clean and fails at first invocation, so the file is copied to
+	@# the zip root under the exact name the stack declares, and a synth assertion
+	@# pins the two together.
+	@cp src/pii_erasure/runtime/entrypoint.py $(RUNTIME_ASSET)/$(RUNTIME_ENTRYPOINT)
 	@find $(LAMBDA_ASSET) $(SAGA_ASSET) -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true
 	@# ── console scripts must not ship (V9-1) ─────────────────────────────────
 	@# `pip install --target` materialises entry-point wrappers into bin/ even under
@@ -182,9 +208,9 @@ package: ## Stage both Lambda assets (participants + saga). Runs before deploy.
 	@# staleness preflight report drift that does not exist. Stripping them is what
 	@# makes the asset a function of the SOURCE rather than of the build machine and
 	@# the minute it ran. The RECORD filter keeps the metadata honest about it.
-	@rm -rf $(LAMBDA_ASSET)/bin $(SAGA_ASSET)/bin
-	@find $(LAMBDA_ASSET) $(SAGA_ASSET) -name RECORD -exec sed -i '\|^\.\..*/bin/|d' {} + 2>/dev/null || true
-	@echo "✅ staged $(LAMBDA_ASSET) ($$(du -sh $(LAMBDA_ASSET) | cut -f1)) + $(SAGA_ASSET) ($$(du -sh $(SAGA_ASSET) | cut -f1))"
+	@rm -rf $(LAMBDA_ASSET)/bin $(SAGA_ASSET)/bin $(RUNTIME_ASSET)/bin
+	@find $(LAMBDA_ASSET) $(SAGA_ASSET) $(RUNTIME_ASSET) -name RECORD -exec sed -i '\|^\.\..*/bin/|d' {} + 2>/dev/null || true
+	@echo "✅ staged $(LAMBDA_ASSET) ($$(du -sh $(LAMBDA_ASSET) | cut -f1)) + $(SAGA_ASSET) ($$(du -sh $(SAGA_ASSET) | cut -f1)) + $(RUNTIME_ASSET) ($$(du -sh $(RUNTIME_ASSET) | cut -f1))"
 
 .PHONY: bootstrap
 bootstrap: ## ⚠️ ONE-TIME per account+region: create the CDK toolkit stack. Human-only.

@@ -21,6 +21,7 @@ from pii_erasure.approval.tokens import TokenMinter
 from pii_erasure.ledger.writer import LedgerWriter
 from pii_erasure.manifest import ManifestSigner
 from pii_erasure.saga.invoker import LambdaParticipantInvoker
+from pii_erasure.saga.planner import DiscoveryPlanner, planner_from_environment
 from pii_erasure.saga.tombstone import TombstoneRegistry
 from pii_erasure.scheduler.base import Scheduler
 from pii_erasure.scheduler.eventbridge import EventBridgeScheduler
@@ -82,6 +83,14 @@ class SagaDeps:
     grace_seconds_override: int | None = None
     #: Bounded forward-recovery retries per participant in phase 3, then the DLQ.
     hard_delete_attempts: int = 3
+    #: The reasoning plane, or None. `None` is a legitimate configuration — an
+    #: M5-shaped saga replays a manifest from its start input (ADR-001) — not a
+    #: degraded one. `plan` fails loudly when neither source is available.
+    #:
+    #: Typed as a planner, never as a model client: there is no field on this
+    #: dataclass a model client could live in, which is invariant 2 expressed as
+    #: a type rather than as a rule.
+    planner: DiscoveryPlanner | None = None
 
 
 def _utcnow() -> datetime:
@@ -109,6 +118,7 @@ def production_deps() -> SagaDeps:
         scheduler=_production_scheduler(stage),
         tombstones=TombstoneRegistry(os.environ["TOMBSTONES_TABLE"]),
         dead_letters=SqsDeadLetters(os.environ["SAGA_DLQ_URL"]),
+        planner=planner_from_environment(),
         signer=ManifestSigner(os.environ["SIGNING_KEY_ARN"]),
         tokens=TokenMinter(os.environ["SIGNING_KEY_ARN"]),
         trusted_key_arns=frozenset(trusted.split(",")) if trusted else None,

@@ -113,6 +113,13 @@ class GroundTruth:
     #: reader — or a recall run — cannot mistake a partial seed for a complete one.
     degraded: list[str] = field(default_factory=list)
 
+    #: subjectRef → the hold ids actually INSERTed. The `hold_detection` evaluator's
+    #: denominator, and generated on the same terms as the placements: recorded from
+    #: the write, never copied from the seed declaration. A hold the seeder failed to
+    #: write must not appear here, or the evaluator would fail the agent for missing
+    #: something that was never there.
+    holds: dict[str, list[str]] = field(default_factory=dict)
+
     def record(self, subject_ref: str, placement: Placement) -> None:
         if not placement.artifacts or not any(placement.artifacts.values()):
             return  # nothing written is not a placement, and must not become one
@@ -130,6 +137,11 @@ class GroundTruth:
             ),
             "tenantId": self.tenant_id,
             **({"degraded": sorted(self.degraded)} if self.degraded else {}),
+            **(
+                {"holds": {s: sorted(h) for s, h in sorted(self.holds.items())}}
+                if self.holds
+                else {}
+            ),
             "subjects": {
                 subject_ref: {
                     p.system_id: p.artifacts for p in sorted(places, key=lambda x: x.system_id)
@@ -186,6 +198,9 @@ class FixtureGenerator:
         #: a writer that works or crashes depending on whether the caller came through
         #: `run()` is a trap for the next caller (V9-2). `run()` copies these into the
         #: GroundTruth it returns.
+        #: subjectRef → hold ids written. Initialised HERE, not in `run()`: V9-2 was
+        #: exactly this shape — a writer that only worked when driven through `run()`.
+        self._holds: dict[str, list[str]] = {}
         self._degraded: list[str] = []
 
     # ── the pass ─────────────────────────────────────────────────────────────────────
@@ -206,6 +221,7 @@ class FixtureGenerator:
                 written = writer(subject, expected)
                 truth.record(subject_ref, Placement(system_id=system_id, artifacts=written))
         truth.degraded.extend(self._degraded)
+        truth.holds.update(self._holds)
         return truth
 
     def _record_degraded(self, message: str) -> None:
@@ -344,6 +360,7 @@ class FixtureGenerator:
                 scope=hold["scope"],
                 basis=hold["basis"],
             )
+            self._holds.setdefault(subject["subjectRef"], []).append(hold["holdId"])
         return written
 
     def _write_uploads(self, subject: dict[str, Any], expected: dict[str, int]) -> dict[str, int]:

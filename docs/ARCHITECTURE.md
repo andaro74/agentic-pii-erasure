@@ -1011,6 +1011,7 @@ infra/stacks/  policies/cedar/  evals/  tests/{unit,conformance,integration}  do
 | 022 | Canonical JSON is a documented subset of RFC 8785 | Removes float, normalisation and key-ordering drift instead of implementing them; rejects provenance rather than stripping it | Exact JCS; `json.dumps(sort_keys=True)`; strip volatile keys |
 | 023 | Aurora needs a VPC; the platform still never enters one | No VPC-less Aurora exists; the enforceable property is that nothing we run attaches to one, and the VPC holds nothing that bills | Drop the RELATIONAL archetype; Aurora DSQL; leave the claim uncorrected |
 | 024 | Cedar expresses identity and request shape, not business state | The generated schema exposes `context.input` only; six of §9.2's policies could never fire | Keep policies that validate against nothing; inject the facts as tool arguments the caller asserts |
+| 025 | The discovery Runtime ships as an S3 code zip, not a container | `cdk synth` runs in `make check`; a `DockerImageAsset` builds at synth time and would put a Docker daemon + arm64 emulation inside the hermetic gate | Container in ECR (also an image-storage floor); `@app.entrypoint` from the AgentCore SDK |
 
 ---
 

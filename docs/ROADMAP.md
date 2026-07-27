@@ -183,6 +183,26 @@ There is no local mode ([ADR-017](adr/ADR-017-real-aws-participants.md)), so fro
 
 ## - [ ] M7 · Discovery on AgentCore Runtime + the recall gate
 
+> **Hermetic half landed 2026-07-27.** The discovery subgraph, the five agents, the
+> Runtime HTTP contract, `infra/stacks/runtime.py`, Memory priors with the rejecting
+> scrubber, `evals/run.py` + nine evaluators, and the adversarial corpus.
+> `make check`: **957 passed**, mypy clean on 93 files.
+>
+> **The research changed the artifact.** `CreateAgentRuntime` now accepts a
+> `codeConfiguration` — an S3 zip — as well as a container image, and the container
+> path would have put a Docker daemon inside `cdk synth`, which runs in `make check`.
+> [ADR-025](adr/ADR-025-runtime-ships-a-code-zip.md) records that; the arm64 platform
+> tag was proven with `pip download` first, because `numpy` publishes no
+> `manylinux2014_aarch64` wheel and that would otherwise have been a fifth V10 finding.
+>
+> **Where recall comes from, stated plainly:** the prospector sweeps every registered
+> participant on every run and the editor cannot subtract, so recall 1.0 is a property
+> of the graph rather than of the model. That is also what makes the adversarial gate
+> winnable without grading the model's disposition (§11.4).
+>
+> Remaining for the tick: `make deploy-dev`, then `make eval` and `make eval-adversarial`.
+
+
 **Build:** `discovery/subgraph.py` + `agents/` (cartographer, prospector, lineage, counsel, editor) · `runtime/entrypoint.py` (the AgentCore Runtime HTTP contract) + container image · `infra/stacks/runtime.py` · AgentCore Memory priors with the pre-write scrubber ([ADR-019](adr/ADR-019-agentcore-memory-priors.md)) · `evals/run.py` and evaluators (recall **hard-fails below 1.0**, precision report-only, hold_detection, trajectory, residual_honesty, no_pii_in_memory, tool_surface_minimality) · the adversarial corpus end to end.
 
 **Hermetic done when:** the read-only tool list is asserted at subgraph construction with a unit test behind it · `cdk synth` asserts the Runtime role has no participant IAM.

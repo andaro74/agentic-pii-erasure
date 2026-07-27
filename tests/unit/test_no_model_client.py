@@ -27,6 +27,19 @@ EXECUTION_PLANE = ("saga", "scheduler", "approval")
 _FORBIDDEN_IMPORT_ROOTS = {"langchain", "langchain_aws", "langchain_core", "langchain_community"}
 _FORBIDDEN_IDENTIFIER_PREFIXES = ("ChatBedrock",)
 
+#: The ONE boto3 service the execution plane may reach in the Bedrock family, and the
+#: ONE file that may reach it. Invariant 12 has always said this — *"their only
+#: AgentCore permission is the single `plan` node's Runtime invocation"* — but until
+#: M7 nothing in `saga/` needed AgentCore, so the guard used a `bedrock` prefix that
+#: was accidentally exact. It is now spelled out rather than widened: `bedrock-runtime`
+#: (the model client) still fails everywhere, including in the allowlisted file.
+#:
+#: The distinction is the whole invariant. `bedrock-runtime` means "this process
+#: reasons". `bedrock-agentcore` means "this process asks something else to reason and
+#: receives JSON" — which is what makes the boundary expressible in IAM at all.
+_AGENTCORE_CLIENT = "bedrock-agentcore"
+_AGENTCORE_ALLOWED_IN = frozenset({"saga/planner.py"})
+
 
 def _modules() -> list[Path]:
     paths: list[Path] = []
@@ -60,8 +73,12 @@ def test_no_model_client_in_the_execution_plane(path: Path) -> None:
             if isinstance(func, ast.Attribute) and func.attr == "client" and node.args:
                 first = node.args[0]
                 if isinstance(first, ast.Constant) and isinstance(first.value, str):
-                    assert not first.value.startswith("bedrock"), (
-                        f"{_relative(path)} constructs a {first.value!r} client "
+                    service = first.value
+                    permitted = (
+                        service == _AGENTCORE_CLIENT and _relative(path) in _AGENTCORE_ALLOWED_IN
+                    )
+                    assert not service.startswith("bedrock") or permitted, (
+                        f"{_relative(path)} constructs a {service!r} client "
                         "(invariant 2 — and invariant 12 denies it IAM anyway)"
                     )
         elif isinstance(node, ast.Name | ast.Attribute):
@@ -69,6 +86,38 @@ def test_no_model_client_in_the_execution_plane(path: Path) -> None:
             assert not name.startswith(_FORBIDDEN_IDENTIFIER_PREFIXES), (
                 f"{_relative(path)} references {name} (invariant 2)"
             )
+
+
+def test_the_agentcore_exception_is_exactly_one_file() -> None:
+    """The allowlist is a hole in a guard, so its size is the thing to check.
+
+    Invariant 12 permits one AgentCore call from one place. If this list grows, the
+    saga has more than one route to the reasoning plane and the IAM assertion in
+    `test_saga_synth.py` no longer describes the code.
+    """
+    assert {"saga/planner.py"} == _AGENTCORE_ALLOWED_IN
+    assert (SRC / "saga" / "planner.py").is_file()
+
+
+@pytest.mark.parametrize("service", ["bedrock-runtime", "bedrock", "bedrock-agent-runtime"])
+def test_a_model_client_still_fails_inside_the_allowlisted_file(service: str) -> None:
+    """The exception is for `bedrock-agentcore` specifically, not for the `bedrock`
+    family. A model client in `planner.py` must still fail — otherwise the allowlist
+    would have quietly legalised the thing invariant 2 exists to prevent."""
+    source = f"import boto3\nc = boto3.client({service!r})\n"
+    tree = ast.parse(source)
+    offending = [
+        node.args[0].value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "client"
+        and node.args
+        and isinstance(node.args[0], ast.Constant)
+    ]
+    assert offending == [service]
+    permitted = service == _AGENTCORE_CLIENT
+    assert not permitted, f"{service} must never be permitted in the execution plane"
 
 
 def test_the_guard_is_looking_at_real_modules() -> None:

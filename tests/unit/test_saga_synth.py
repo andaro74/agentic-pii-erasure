@@ -50,6 +50,12 @@ def saga_template() -> Template:
         idempotency=foundation.idempotency,
         signing_key=foundation.signing_key,
         participants=participants.functions,
+        # Constructed the way `infra/app.py` does, so the fixture exercises the
+        # deployed shape. A fixture that omitted this would make the
+        # "no model permission" assertion pass for the wrong reason.
+        discovery_runtime_arn=(
+            "arn:aws:bedrock-agentcore:us-west-2:000000000000:runtime/asdp_t_discovery-abc123"
+        ),
     )
     return Template.from_stack(saga)
 
@@ -68,11 +74,69 @@ def _all_policy_actions(template: Template) -> list[str]:
     return actions
 
 
-def test_no_bedrock_action_anywhere_in_the_saga_stack(saga_template: Template) -> None:
+#: Invariant 12, verbatim: *"their only AgentCore permission is the single `plan`
+#: node's Runtime invocation."* One action, named exactly. `bedrock:InvokeModel` and
+#: every other `bedrock:*` remains forbidden — that distinction IS the invariant, and
+#: it is what makes "the saga cannot reason" an IAM fact rather than a code-review rule.
+SAGA_PERMITTED_AGENTCORE = frozenset({"bedrock-agentcore:InvokeAgentRuntime"})
+
+
+def test_the_saga_has_no_model_permission(saga_template: Template) -> None:
     """Invariant 12. The saga replays approved manifests; a model permission on this
-    role would mean replay could re-enter the model — the exact thing ADR-001 forbids."""
-    offending = [a for a in _all_policy_actions(saga_template) if "bedrock" in a.lower()]
-    assert offending == [], f"saga roles must carry no bedrock permission, found {offending}"
+    role would mean replay could re-enter the model — the exact thing ADR-001 forbids.
+
+    Before M7 this asserted *no `bedrock` action at all*, which was accidentally exact
+    because nothing in the saga needed AgentCore. M7 gives `plan` one Runtime call, so
+    the assertion is now spelled out: one named action, and `bedrock:*` still zero.
+    A widened prefix would have let `bedrock:InvokeModel` through on the same edit.
+    """
+    bedrock_family = [a for a in _all_policy_actions(saga_template) if "bedrock" in a.lower()]
+    model_actions = [a for a in bedrock_family if a.lower().startswith("bedrock:")]
+    assert model_actions == [], f"the saga must hold no model permission, found {model_actions}"
+    unexpected = set(bedrock_family) - SAGA_PERMITTED_AGENTCORE
+    assert not unexpected, f"unexpected AgentCore permission on a saga role: {sorted(unexpected)}"
+
+
+def test_the_saga_may_invoke_exactly_one_runtime(saga_template: Template) -> None:
+    """The other half: the permission exists, and is scoped to one ARN.
+
+    A wildcard here would let the saga invoke any AgentCore runtime in the account —
+    including one an attacker created — and receive a manifest from it. The manifest
+    would still have to survive signing, validation and approval, but the plan a human
+    reviews would have been written by something nobody deployed.
+    """
+    for policy in saga_template.find_resources("AWS::IAM::Policy").values():
+        for statement in policy["Properties"]["PolicyDocument"]["Statement"]:
+            actions = statement.get("Action", [])
+            actions = [actions] if isinstance(actions, str) else actions
+            if "bedrock-agentcore:InvokeAgentRuntime" in actions:
+                assert statement["Resource"] != "*", "the Runtime grant must name one ARN"
+                return
+    pytest.fail("the plan node has no Runtime invocation permission")
+
+
+def test_the_resume_role_cannot_invoke_the_runtime(saga_template: Template) -> None:
+    """Invariant 3's mechanism, in IAM. The resume Lambda replays a checkpointed
+    manifest; re-planning after an approval would execute a plan nobody approved.
+    Withholding the permission makes that un-makeable rather than merely uncoded —
+    the same shape as `notify-suppression` having no delete permission.
+    """
+    resume_roles = {
+        logical_id
+        for logical_id in saga_template.find_resources("AWS::IAM::Role")
+        if "Resume" in logical_id
+    }
+    assert resume_roles, "no resume role found — the fixture is not exercising both planes"
+    for policy in saga_template.find_resources("AWS::IAM::Policy").values():
+        actions: list[str] = []
+        for statement in policy["Properties"]["PolicyDocument"]["Statement"]:
+            listed = statement.get("Action", [])
+            actions.extend([listed] if isinstance(listed, str) else listed)
+        if not any("InvokeAgentRuntime" in action for action in actions):
+            continue
+        attached = json.dumps(policy["Properties"].get("Roles", []))
+        for role in resume_roles:
+            assert role not in attached, f"{role} may invoke the discovery Runtime"
 
 
 def test_no_saga_function_attaches_to_a_vpc(saga_template: Template) -> None:
