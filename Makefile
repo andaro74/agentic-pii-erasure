@@ -16,7 +16,7 @@ PYTEST := $(VENV_BIN)/pytest
 # and pick them up automatically the moment they appear — the same "becomes
 # mandatory when it lands" rule the milestone gates use (docs/ROADMAP.md, rule 4).
 # Not a silencing guard.
-LINT_DIRS := src tests $(wildcard infra evals seeds)
+LINT_DIRS := src tests $(wildcard infra evals seeds scripts)
 
 # Milestone-gated targets: stages that haven't been built yet print "⏳ lands
 # at Mx" instead of failing, so `make check` and CI are green from commit zero.
@@ -233,7 +233,11 @@ deploy-dev: package preflight ## ⚠️ Deploy a dev-shaped stack (STAGE=dev by 
 	$(REQUIRE_REGION); \
 	$(RESOLVE_STAGE); \
 	echo "deploying stage=$$stage to $$AWS_REGION"; \
-	cd infra && $(CDK) deploy --all --app '$(CDK_APP)' --context stage="$$stage"
+	cd infra && $(CDK) deploy --all --app '$(CDK_APP)' --context stage="$$stage" \
+		$${POLICY_MODE:+--parameters "asdp-$$stage-gateway:PolicyEnforcementMode=$$POLICY_MODE"}
+# POLICY_MODE flips Cedar enforcement as a DEPLOY so it lands in CloudTrail (§9.4):
+#   POLICY_MODE=ENFORCE make deploy-dev
+# Omitted, CDK reuses the stack's previous value — the flip is sticky, not per-deploy.
 
 .PHONY: deploy
 deploy: package ## ⚠️ Deploy the production-shaped stack. Human-only. (M10)

@@ -158,7 +158,16 @@ There is no local mode ([ADR-017](adr/ADR-017-real-aws-participants.md)), so fro
 
 **Hermetic done when:** `make policy-test` green — the Cedar files parse and evaluate, and the engine/Cedar divergence test passes.
 
-**Deployed done when:** `hard_delete` without a digest-bound token → **denied at the Gateway and logged**, saga halts with no authz retry loop · `tools/list` for the `asdp-discovery` identity returns exactly `subject.discover` and `subject.verify`.
+**Deployed done when** (in `ENFORCE` — `POLICY_MODE=ENFORCE make deploy-dev`, riskless before M7 because nothing legitimate calls the Gateway yet): `make integration` still green · `scripts/verify_policy_gate.py` passes — a direct MCP `hard_delete` without a digest-bound token is **denied at the Gateway**, and `tools/list` for an unpermitted identity is **empty**.
+
+> The gate as first written said "saga halts with no authz retry loop" and named the
+> `asdp-discovery` tool surface. Both were drift, corrected here on the record: the saga
+> never traverses the Gateway (it invokes participants directly — `saga/invoker.py`, M5),
+> so a Gateway deny cannot halt it; and `asdp-discovery` is assumable only by
+> `bedrock-agentcore.amazonaws.com`, so no caller can run `tools/list` *as* discovery
+> until M7's Runtime exists. The discovery-surface claim is asserted hermetically today
+> (`test_the_discovery_tool_surface_is_exactly_discover_and_verify`) and lands deployed
+> as M7's `tool_surface_minimality` evaluator.
 
 **Traps:** default-deny, forbid-wins · the engine and the Cedar files express identical rules against two backends — one divergence test between them · **entity and context names are validated against the generated schema, never assumed** ([ADR-018](adr/ADR-018-agentcore-policy.md)); a policy referencing a context key the Gateway does not inject is a policy that silently never fires · the decisions log feeds M7's adversarial eval.
 
