@@ -214,6 +214,9 @@ infra/
 ├── app.py
 ├── README.md              ⚠️ cost warning FIRST, then teardown, then deploy
 └── stacks/
+    ├── naming.py          AgentCore's TWO name conventions. Gateway/Target take
+    │                      `asdp-dev-…`; Policy/PolicyEngine/AgentRuntime take
+    │                      `asdp_dev_…`, ≤48 chars. Refuses at synth (V10-1)
     ├── foundation.py      KMS CMK · DynamoDB tables (checkpoints, ledger, tombstones,
     │                      DEK registry, idempotency) · S3 buckets · EventBridge bus
     ├── participants.py    the 8 real services + their Lambda handlers, one role each
@@ -231,6 +234,9 @@ Assertions that live in `cdk synth` because a runtime test would be too late:
 - no Lambda in the stack has a VPC configuration
 - the ledger archive bucket has Object Lock in COMPLIANCE mode
 - the discovery Runtime role has no participant-service actions
+- every AgentCore Policy and PolicyEngine `Name` matches the pattern the **installed
+  service model** declares — synth validates the template, not the service, so without
+  this the rejection arrives from CloudFormation mid-deploy (V10-1)
 
 ## `evals/`, `seeds/`, `tests/`
 

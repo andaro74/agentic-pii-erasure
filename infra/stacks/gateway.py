@@ -39,6 +39,7 @@ from constructs import Construct
 
 from pii_erasure.contract.tools import TOOL_DEFINITIONS
 from pii_erasure.policy.engine import policy_files
+from stacks.naming import agentcore_identifier
 
 
 class GatewayStack(Stack):
@@ -87,10 +88,12 @@ class GatewayStack(Stack):
             function.grant_invoke(self.role)
 
         # ── The Cedar runtime (ADR-018) ─────────────────────────────────────
+        # `agentcore_identifier`, not the `asdp-{stage}-…` form used everywhere else:
+        # Policy and PolicyEngine names take underscores only. See stacks/naming.py.
         self.policy_engine = agentcore.CfnPolicyEngine(
             self,
             "PolicyEngine",
-            name=f"asdp-{stage}-policy-engine",
+            name=agentcore_identifier("asdp", stage, "policy_engine"),
             description="ASDP Cedar policy set for the deletion Gateway",
         )
         self.policies = self._attach_policies(stage)
@@ -179,7 +182,7 @@ class GatewayStack(Stack):
                 agentcore.CfnPolicy(
                     self,
                     construct_id,
-                    name=f"asdp-{stage}-{path.stem}",
+                    name=agentcore_identifier("asdp", stage, path.stem),
                     policy_engine_id=self.policy_engine.attr_policy_engine_id,
                     description=f"ASDP Cedar policy: {path.stem}",
                     enforcement_mode="ACTIVE",

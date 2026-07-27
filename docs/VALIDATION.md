@@ -862,6 +862,33 @@ the `RESIDUAL_BY_DESIGN` archetype is not exercised. The suite now emits a warni
 that gap rather than letting a green run imply otherwise (invariant 7's honesty applied to
 the test harness). It closes when SES production access lands — no code change.
 
+### 2026-07-27 · M6's deployed gate: synth validates the template, not the service
+
+| ID | Severity | Finding | Resolution |
+|---|---|---|---|
+| **V10-1** | **Medium** | **Every Cedar policy was named something the AgentCore control plane rejects.** `make check` was green — lint, 767 tests, `cdk synth` with its IAM assertions — and `make deploy-dev` failed change-set validation on all six new resources: `Property value [asdp-dev-05-discovery-never-mutates] does not match pattern: ^[A-Za-z][A-Za-z0-9_]*$`. AgentCore has **two** name conventions and I assumed one. `GatewayName` is `([0-9a-zA-Z][-]?){1,48}` and `TargetName` `([0-9a-zA-Z][-]?){1,100}` — hyphens fine, which is why M4 deployed clean and the question never came up. `PolicyName`, `PolicyEngineName` and `AgentRuntimeName` are `[A-Za-z][A-Za-z0-9_]*` capped at 48: underscores only. | `infra/stacks/naming.py` translates the one convention into the other and **raises `NameConstraintError` at synth** rather than repairing anything — truncation is the tempting fix and the wrong one, because two policies trimmed to the same 48 characters is one policy deployed and one silently absent. Guarded twice: `tests/unit/test_naming.py` re-reads the installed `bedrock-agentcore-control` model and asserts the literals still match it, and `test_participants_synth.py` validates every synthesized `Name` against the *service's own* pattern rather than a second copy of it. |
+
+**The interesting part is not the pattern — it is that `cdk synth` had no opinion.** Synth
+checks the template against CloudFormation's *syntax*; the resource schema, where the
+pattern lives, is only consulted server-side during change-set validation. So a whole class
+of defect — every name, every enum, every length cap AWS declares — sits downstream of the
+hermetic gate by construction. That gap is now closed for the shapes this stack generates,
+by driving the assertion from the installed service model, which makes it the service's
+constraint under test rather than a remembered copy of it.
+
+**Mutation-tested**: reverting both names to the `f"asdp-{stage}-…"` form fails the new
+synth guard on `AWS::BedrockAgentCore::Policy` *and* `AWS::BedrockAgentCore::PolicyEngine`
+with the control plane's own pattern quoted back; restoring `agentcore_identifier` turns
+them green.
+
+**The cost of the miss was one failed deploy and no damage**, because change-set validation
+runs before anything is created — but this is the fourth finding in the ADR-017 family: the
+hermetic gate models the code, not the world, and the world keeps declaring constraints
+nobody re-read. The rule this reinforces is the ROADMAP's third: *the installed service
+model is evidence; the convention used three files up is not.* `AgentRuntimeName` carries
+the same constraint and lands at M7 — it is already covered by the helper and named in its
+test, so the second occurrence costs nothing.
+
 1. Read a doc claim as an adversary: *what would make this false, and could the
    named control detect it?*
 2. If the control can't go red, that's a finding — record it here with the fix and

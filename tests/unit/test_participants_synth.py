@@ -286,6 +286,48 @@ def test_every_cedar_file_deploys_as_its_own_policy(gateway: Template) -> None:
         assert "{stage}" not in properties["Definition"]["Cedar"]["Statement"]
 
 
+@pytest.mark.parametrize(
+    "resource_type",
+    ["AWS::BedrockAgentCore::Policy", "AWS::BedrockAgentCore::PolicyEngine"],
+)
+def test_every_agentcore_policy_name_is_one_the_control_plane_accepts(
+    gateway: Template, resource_type: str
+) -> None:
+    """V10-1: `cdk synth` validates the template, not the service.
+
+    M6 synthesized `asdp-dev-05-discovery-never-mutates` and every hermetic check passed,
+    because nothing here knew that Policy and PolicyEngine names take underscores only
+    (`[A-Za-z][A-Za-z0-9_]*`, 48 chars) while Gateway and Target take hyphens. The
+    rejection arrived from CloudFormation during change-set validation — after synth,
+    after asset upload, minutes into a deploy the human paid for.
+
+    Driven from the installed `bedrock-agentcore-control` model rather than a literal, so
+    it is the *service's* constraint being asserted and not a second copy of it.
+    """
+    import re
+
+    import botocore.session
+
+    shape = {
+        "AWS::BedrockAgentCore::Policy": "PolicyName",
+        "AWS::BedrockAgentCore::PolicyEngine": "PolicyEngineName",
+    }[resource_type]
+    metadata = (
+        botocore.session.get_session()
+        .get_service_model("bedrock-agentcore-control")
+        .shape_for(shape)
+        .metadata
+    )
+    resources = gateway.find_resources(resource_type)
+    assert resources, f"no {resource_type} in the template"
+    for logical_id, resource in resources.items():
+        name = resource["Properties"]["Name"]
+        assert re.fullmatch(metadata["pattern"], name), (
+            f"{logical_id} is named {name!r}, which {shape} rejects ({metadata['pattern']})"
+        )
+        assert len(name) <= metadata["max"], f"{logical_id}: {name!r} exceeds {metadata['max']}"
+
+
 def test_the_discovery_role_the_policies_name_actually_exists(gateway: Template) -> None:
     """A Cedar principal naming a role that does not exist is a permit that can never
     match — and indistinguishable from a wrong policy when you are staring at a deny."""
