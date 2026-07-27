@@ -80,14 +80,18 @@ There is no local mode ([ADR-017](adr/ADR-017-real-aws-participants.md)), so fro
 
 **Traps:** invariants 3–4 · [ADR-006](adr/ADR-006-approval-binds-to-digest.md) — the approval token will bind to exactly this digest · KMS `Sign` takes a digest, not the message, above 4 KB; get the message-type right or verification fails only in production.
 
-## - [ ] M4 · The remaining six participants, seeds, and generated ground truth
+## - [x] M4 · The remaining six participants, seeds, and generated ground truth
 
-> **Hermetic half + validated seed landed 2026-07-26.** All eight handlers, the Meridian
-> seed set, the measuring ground-truth generator (V8-12), conformance seeding/teardown for
-> all eight (V8-13 closed), and `erasure seed` / `erasure inspect`. `make seed` ran and was
-> **validated against the services** (map == deployed discover == raw listings). Remaining
-> for the tick: `make deploy-dev && make conformance` — expect 56 passed / 8 skipped in an
-> SES-sandbox account, 64 / 0 with production access.
+> **Complete 2026-07-26.** All eight handlers, the Meridian seed set, the measuring
+> ground-truth generator (V8-12), conformance seeding/teardown for all eight (V8-13
+> closed), and `erasure seed` / `erasure inspect`. `make seed` ran and was **validated
+> against the services** (map == deployed discover == raw listings — the ground-truth
+> consistency check in the deployed gate). `make conformance` run by the human:
+> **56 passed / 8 skipped in 170.29s** — exactly the predicted SES-sandbox shape. The
+> 8 skips are `notify-suppression`, whose seeding requires `PutSuppressedDestination`
+> (sandbox-blocked); the suite refuses to grade what it couldn't seed rather than
+> mocking it. They convert to passes (64 / 0) when production access lands — no code
+> change, re-run only.
 
 **Build:** `cognito_identity`, `profile_store`, `billing_ledger` (Aurora via RDS Data API), `vector_index` (S3 Vectors — [ADR-021](adr/ADR-021-s3-vectors-for-cost.md)), `analytics_lake`, `notify_suppression` · `seeds/` (the Meridian tenant and the seven subjects from the README table — Dmitri's litigation hold in `billing-ledger`, Yuki's injection payload in the `profile-store` bio, Nneka's `PARTIAL` from the SES suppression list) · `evals/fixtures/generator.py` **emitting the ground-truth placement map in the same pass it writes the data** ([ADR-020](adr/ADR-020-deployed-eval-gate.md)) · CLI `seed` and `inspect` become real.
 
