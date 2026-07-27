@@ -10,10 +10,19 @@ pool for machine-to-machine calls that already have SigV4, and Cognito arrives i
 system as *participant #1* (M4) and as the operator API's authorizer (M8). Keeping those
 apart is deliberate.
 
-**Cedar is not attached yet.** `CfnGateway` takes a `policy_engine_configuration`, and
-wiring it is M6's deliverable together with the `.cedar` files and the deploy-time schema
-validation ADR-018 requires. An empty policy engine attached early would look like a
-control and enforce nothing.
+**Cedar is attached here** (M6). A `CfnPolicyEngine` holds one `CfnPolicy` per file in
+`policies/cedar/`, and the Gateway references it through `policy_engine_configuration`.
+Two properties carry the weight:
+
+* `validation_mode = FAIL_ON_ANY_FINDINGS` — AWS validates each policy against the
+  schema **it** generated from this Gateway's tool manifest and refuses one that does
+  not fit. That is ADR-018's requirement, enforced by the service rather than by us;
+  `make policy-test` runs the same check hermetically against a reconstruction.
+* `mode` is a **CloudFormation parameter**, not an environment variable, so
+  `LOG_ONLY → ENFORCE` is a deploy and therefore lands in CloudTrail (§9.4).
+
+What Cedar can express against the real schema — identity and request shape, not hold
+counts or digest binding — is recorded in ADR-024.
 
 Every shape here — `AuthorizerType`, the MCP target configuration, `ToolDefinition`,
 `GATEWAY_IAM_ROLE` — was read from the installed `bedrock-agentcore-control` API model and
@@ -22,83 +31,14 @@ the AgentCore developer guide rather than recalled (ROADMAP rule 3).
 
 from __future__ import annotations
 
-from typing import Any
-
-from aws_cdk import CfnOutput, Stack
+from aws_cdk import CfnOutput, CfnParameter, Stack
 from aws_cdk import aws_bedrockagentcore as agentcore
 from aws_cdk import aws_iam as iam
 from aws_cdk import aws_lambda as lambda_
 from constructs import Construct
 
-_STRING = {"type": "string"}
-
-
-def _artifact_array() -> dict[str, Any]:
-    return {
-        "type": "array",
-        "description": "Echo of the approved artifact set",
-        "items": {
-            "type": "object",
-            "properties": {
-                "kind": _STRING,
-                "locator": _STRING,
-                "count": {"type": "integer"},
-                "classification": {"type": "array", "items": _STRING},
-                "retentionUntil": _STRING,
-            },
-            "required": ["kind", "locator"],
-        },
-    }
-
-
-def _mutation_schema(*, approval: bool) -> dict[str, Any]:
-    properties: dict[str, Any] = {
-        "subjectRef": {"type": "string", "description": "Pseudonymous handle, never raw PII"},
-        "sagaId": _STRING,
-        "manifestDigest": {"type": "string", "description": "Binds this call to an approved plan"},
-        "idempotencyKey": _STRING,
-        "artifacts": _artifact_array(),
-        "dryRun": {"type": "boolean"},
-    }
-    required = ["subjectRef", "sagaId", "manifestDigest", "idempotencyKey", "artifacts"]
-    if approval:
-        properties["approvalToken"] = {
-            "type": "string",
-            "description": "Digest-bound approval token (ADR-006)",
-        }
-        required.append("approvalToken")
-    return {"type": "object", "properties": properties, "required": required}
-
-
-def _read_schema(*, hints: bool) -> dict[str, Any]:
-    properties: dict[str, Any] = {"subjectRef": _STRING, "sagaId": _STRING}
-    if hints:
-        properties["scopeHints"] = {"type": "array", "items": _STRING}
-    return {"type": "object", "properties": properties, "required": ["subjectRef", "sagaId"]}
-
-
-#: The five verbs, as the Gateway will publish them. Order is fixed so the synthesised
-#: template is stable; the read-only pair is first because that is the subset a discovery
-#: identity is ever permitted to see (invariant 1, enforced by Cedar at M6).
-TOOL_DEFINITIONS: tuple[tuple[str, str, dict[str, Any]], ...] = (
-    ("discover", "Read-only. What exists for this subject here?", _read_schema(hints=True)),
-    ("verify", "Read-only assertion. Must return zero artifacts.", _read_schema(hints=False)),
-    (
-        "soft_delete",
-        "Reversible. Disable, tombstone, or mark pending-anonymization.",
-        _mutation_schema(approval=False),
-    ),
-    (
-        "restore",
-        "The compensating transaction for soft_delete. Never reachable from phase 3.",
-        _mutation_schema(approval=False),
-    ),
-    (
-        "hard_delete",
-        "Irreversible. Purge or crypto-shred. Requires a digest-bound approval token.",
-        _mutation_schema(approval=True),
-    ),
-)
+from pii_erasure.contract.tools import TOOL_DEFINITIONS
+from pii_erasure.policy.engine import policy_files
 
 
 class GatewayStack(Stack):
@@ -115,6 +55,25 @@ class GatewayStack(Stack):
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)  # type: ignore[arg-type]
 
+        # ── LOG_ONLY → ENFORCE is a DEPLOY, not a runtime flag (§9.4) ────────
+        # A CfnParameter rather than an env var or a context value on purpose:
+        # flipping enforcement changes the template, so the change is a
+        # CloudFormation event with an identity attached to it. Rollout order is
+        # the default: observe the deny set against known-good trajectories
+        # first, flip second. Skipping that produces an outage on day one and a
+        # team that disables policy to restore service.
+        self.policy_mode = CfnParameter(
+            self,
+            "PolicyEnforcementMode",
+            type="String",
+            default="LOG_ONLY",
+            allowed_values=["LOG_ONLY", "ENFORCE"],
+            description=(
+                "AgentCore Policy mode. LOG_ONLY evaluates and records; ENFORCE denies. "
+                "Deploy LOG_ONLY first and flip only when the deny set is empty (§9.4)."
+            ),
+        )
+
         # The Gateway assumes this role to invoke targets. Scoped to exactly the
         # participant functions — a wildcard here would let a future misconfigured
         # target reach any Lambda in the account.
@@ -126,6 +85,15 @@ class GatewayStack(Stack):
         )
         for function in participants.values():
             function.grant_invoke(self.role)
+
+        # ── The Cedar runtime (ADR-018) ─────────────────────────────────────
+        self.policy_engine = agentcore.CfnPolicyEngine(
+            self,
+            "PolicyEngine",
+            name=f"asdp-{stage}-policy-engine",
+            description="ASDP Cedar policy set for the deletion Gateway",
+        )
+        self.policies = self._attach_policies(stage)
 
         self.gateway = agentcore.CfnGateway(
             self,
@@ -143,15 +111,85 @@ class GatewayStack(Stack):
                     ),
                 )
             ),
+            policy_engine_configuration=(
+                agentcore.CfnGateway.GatewayPolicyEngineConfigurationProperty(
+                    arn=self.policy_engine.attr_policy_engine_arn,
+                    mode=self.policy_mode.value_as_string,
+                )
+            ),
+        )
+        # The engine and its policies must exist before the Gateway references them,
+        # and the policies validate against the schema the Gateway generates — so the
+        # ordering is a real dependency, not a formality.
+        for policy in self.policies:
+            self.gateway.node.add_dependency(policy)
+
+        # ── The discovery identity the policies name ─────────────────────────
+        # Created here, with the policy set, because a Cedar principal that names a
+        # role which does not exist is a permit that can never match — and "the
+        # policy is fine, the role is missing" is indistinguishable from "the policy
+        # is wrong" when you are staring at a deny. The Runtime that assumes it lands
+        # at M7; the role carries no participant IAM and never will (§9.3), because
+        # its only route to the participants is through this Gateway.
+        self.discovery_role = iam.Role(
+            self,
+            "DiscoveryRole",
+            role_name=f"asdp-{stage}-discovery",
+            assumed_by=iam.ServicePrincipal("bedrock-agentcore.amazonaws.com"),
+            description="ASDP discovery identity — read-only at the Gateway (invariant 1)",
+        )
+        self.discovery_role.add_to_policy(
+            iam.PolicyStatement(
+                actions=["bedrock-agentcore:InvokeGateway"],
+                resources=[self.gateway.attr_gateway_arn],
+            )
         )
 
         self.targets: dict[str, agentcore.CfnGatewayTarget] = {}
         for system_id, function in participants.items():
             self.targets[system_id] = self._target(system_id, function)
 
+        CfnOutput(self, "PolicyEngineArn", value=self.policy_engine.attr_policy_engine_arn)
+        CfnOutput(self, "DiscoveryRoleArn", value=self.discovery_role.role_arn)
+        CfnOutput(self, "PolicyMode", value=self.policy_mode.value_as_string)
         CfnOutput(self, "GatewayId", value=self.gateway.attr_gateway_identifier)
         CfnOutput(self, "GatewayUrl", value=self.gateway.attr_gateway_url)
         CfnOutput(self, "GatewayRoleArn", value=self.role.role_arn)
+
+    def _attach_policies(self, stage: str) -> list[agentcore.CfnPolicy]:
+        """One `CfnPolicy` per `.cedar` file — the file boundary IS the policy boundary.
+
+        `validation_mode=FAIL_ON_ANY_FINDINGS` is the control ADR-018 asks for: AWS
+        validates each statement against the schema it generated from THIS Gateway's
+        tool manifest, and the deploy fails if a policy references something the
+        manifest does not declare. Without it, a policy naming a context key the
+        Gateway never injects would deploy clean and silently never fire.
+
+        `enforcement_mode` stays ACTIVE on every policy; the LOG_ONLY/ENFORCE switch
+        lives once, on the Gateway, so there is exactly one thing to flip and one
+        thing to read in CloudTrail.
+        """
+        policies: list[agentcore.CfnPolicy] = []
+        for path in policy_files():
+            statement = path.read_text(encoding="utf-8").replace("{stage}", stage)
+            construct_id = "Policy" + "".join(
+                part.capitalize() for part in path.stem.split("-") if not part.isdigit()
+            )
+            policies.append(
+                agentcore.CfnPolicy(
+                    self,
+                    construct_id,
+                    name=f"asdp-{stage}-{path.stem}",
+                    policy_engine_id=self.policy_engine.attr_policy_engine_id,
+                    description=f"ASDP Cedar policy: {path.stem}",
+                    enforcement_mode="ACTIVE",
+                    validation_mode="FAIL_ON_ANY_FINDINGS",
+                    definition=agentcore.CfnPolicy.PolicyDefinitionProperty(
+                        cedar=agentcore.CfnPolicy.CedarPolicyProperty(statement=statement)
+                    ),
+                )
+            )
+        return policies
 
     def _target(self, system_id: str, function: lambda_.IFunction) -> agentcore.CfnGatewayTarget:
         """Register one participant Lambda as an MCP target.

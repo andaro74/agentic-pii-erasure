@@ -165,10 +165,31 @@ class SagaStack(Stack):
         environment: dict[str, str],
         description: str,
     ) -> lambda_.Function:
-        """One saga-plane function. No VPC, ever — asserted at synth time."""
+        """One saga-plane function. No VPC, ever — asserted at synth time.
+
+        The execution role is named explicitly because M6's Cedar policies match the
+        principal on `principal.id like "*:assumed-role/asdp-<stage>-saga-executor"`.
+        CDK's generated role names embed a construct hash that changes on replacement,
+        which would silently unbind the policy from the identity it exists to
+        authorise — a permit that matches nothing, denying everything, at the moment
+        of a routine refactor.
+        """
+        role = iam.Role(
+            self,
+            f"{construct_id}Role",
+            role_name=f"asdp-{stage}-{name}",
+            assumed_by=iam.ServicePrincipal("lambda.amazonaws.com"),
+            managed_policies=[
+                iam.ManagedPolicy.from_aws_managed_policy_name(
+                    "service-role/AWSLambdaBasicExecutionRole"
+                )
+            ],
+            description=f"ASDP {name} execution role. No bedrock:* — invariant 12.",
+        )
         return lambda_.Function(
             self,
             construct_id,
+            role=role,
             function_name=f"asdp-{stage}-{name}",
             runtime=_RUNTIME,
             handler=handler,

@@ -42,9 +42,9 @@ install: ## Create venv and install (lockfile-constrained) with dev extras
 	@# (ADR-016). It constrains rather than installs, so extras resolve freely
 	@# where the lock is silent. Regenerate ONLY via make lock + upgrade-canary.
 	@if [ -f requirements.lock ]; then \
-		$(PY) -m pip install -c requirements.lock -e ".[dev,infra,otel]"; \
+		$(PY) -m pip install -c requirements.lock -e ".[dev,infra,otel,cedar]"; \
 	else \
-		$(PY) -m pip install -e ".[dev,infra,otel]"; \
+		$(PY) -m pip install -e ".[dev,infra,otel,cedar]"; \
 	fi
 	@test -f .env || cp .env.example .env
 	@echo "✅ next: make check · then open docs/ROADMAP.md"

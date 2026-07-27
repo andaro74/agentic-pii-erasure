@@ -242,11 +242,57 @@ def test_the_gateway_speaks_mcp_and_authenticates_with_iam(gateway: Template) ->
     )
 
 
-def test_no_cedar_policy_engine_is_attached_yet(gateway: Template) -> None:
-    """Honest absence. An empty policy engine attached at M2 would look like a control
-    and enforce nothing; ADR-018's schema validation and the .cedar files land at M6."""
+def test_the_cedar_policy_engine_is_attached(gateway: Template) -> None:
+    """M6 inverts an M2-era guard, deliberately and on the record.
+
+    Until M6 this asserted the OPPOSITE — that no policy engine was attached — because
+    an empty engine wired early would have looked like a control while enforcing
+    nothing. The absence was the honest state then; the attachment is the honest state
+    now, and the guard flips rather than disappearing so neither condition can arrive
+    unnoticed.
+    """
     for resource in gateway.find_resources("AWS::BedrockAgentCore::Gateway").values():
-        assert "PolicyEngineConfiguration" not in resource["Properties"]
+        configuration = resource["Properties"]["PolicyEngineConfiguration"]
+        assert configuration["Arn"]
+        # The mode is a template PARAMETER, not a literal: LOG_ONLY -> ENFORCE has to
+        # be a deploy so it lands in CloudTrail (ARCHITECTURE §9.4).
+        assert configuration["Mode"] == {"Ref": "PolicyEnforcementMode"}
+
+
+def test_the_enforcement_mode_is_a_parameter_defaulting_to_log_only(
+    gateway: Template,
+) -> None:
+    """§9.4's rollout order, expressed in the template: observe first, enforce second."""
+    parameters = gateway.to_json()["Parameters"]
+    mode = parameters["PolicyEnforcementMode"]
+    assert mode["Default"] == "LOG_ONLY"
+    assert sorted(mode["AllowedValues"]) == ["ENFORCE", "LOG_ONLY"]
+
+
+def test_every_cedar_file_deploys_as_its_own_policy(gateway: Template) -> None:
+    """One statement per file, one file per CfnPolicy — and every one validated by AWS
+    against the schema the Gateway generates (ADR-018's requirement, enforced by the
+    service). A policy deployed with validation off could reference a context key that
+    does not exist and would silently never fire."""
+    from pii_erasure.policy.engine import policy_files
+
+    policies = gateway.find_resources("AWS::BedrockAgentCore::Policy")
+    assert len(policies) == len(policy_files()) >= 4
+    for resource in policies.values():
+        properties = resource["Properties"]
+        assert properties["ValidationMode"] == "FAIL_ON_ANY_FINDINGS"
+        assert properties["EnforcementMode"] == "ACTIVE"
+        assert properties["Definition"]["Cedar"]["Statement"].strip()
+        assert "{stage}" not in properties["Definition"]["Cedar"]["Statement"]
+
+
+def test_the_discovery_role_the_policies_name_actually_exists(gateway: Template) -> None:
+    """A Cedar principal naming a role that does not exist is a permit that can never
+    match — and indistinguishable from a wrong policy when you are staring at a deny."""
+    roles = gateway.find_resources(
+        "AWS::IAM::Role", props={"Properties": {"RoleName": "asdp-dev-discovery"}}
+    )
+    assert len(roles) == 1
 
 
 def test_one_target_per_participant(gateway: Template) -> None:

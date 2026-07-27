@@ -1,0 +1,39 @@
+// ASDP Cedar policy set — the DEPLOYED artifact, not a description of one (ADR-018).
+//
+// One statement per file: AgentCore's CreatePolicy takes a single Cedar statement, so
+// the file boundary IS the policy boundary and every deployed policy is reviewable on
+// its own. Actions are enumerated per participant because AgentCore models each MCP
+// tool as its own Cedar action — there is no context.toolName to pattern-match, and
+// the only context that exists is context.input (ADR-024). The enumerations are
+// asserted against the registry in tests/unit/test_policies.py, so participant #9
+// cannot be missed quietly.
+
+// ── 1. The discovery agent can look, and only look. ──────────────────────────
+// Invariant 1's Cedar half, and the one that also drives tool-list filtering:
+// AgentCore answers `tools/list` with the subset a principal may call, so the
+// discovery identity is never OFFERED a mutating tool. Discovery reads
+// subject-controlled content and is injection-reachable by design; its lack of
+// privilege is the entire security claim.
+permit(
+  principal is AgentCore::IamEntity,
+  action in [
+    AgentCore::Action::"analytics-lake___discover",
+    AgentCore::Action::"analytics-lake___verify",
+    AgentCore::Action::"billing-ledger___discover",
+    AgentCore::Action::"billing-ledger___verify",
+    AgentCore::Action::"cognito-identity___discover",
+    AgentCore::Action::"cognito-identity___verify",
+    AgentCore::Action::"compliance-archive___discover",
+    AgentCore::Action::"compliance-archive___verify",
+    AgentCore::Action::"notify-suppression___discover",
+    AgentCore::Action::"notify-suppression___verify",
+    AgentCore::Action::"profile-store___discover",
+    AgentCore::Action::"profile-store___verify",
+    AgentCore::Action::"upload-bucket___discover",
+    AgentCore::Action::"upload-bucket___verify",
+    AgentCore::Action::"vector-index___discover",
+    AgentCore::Action::"vector-index___verify"
+  ],
+  resource is AgentCore::Gateway
+)
+when { principal.id like "*:assumed-role/asdp-{stage}-discovery" };

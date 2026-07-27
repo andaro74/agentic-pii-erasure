@@ -137,6 +137,23 @@ There is no local mode ([ADR-017](adr/ADR-017-real-aws-participants.md)), so fro
 
 ## - [ ] M6 · Policy
 
+> **Hermetic half landed 2026-07-27.** The five-file Cedar set in `policies/cedar/`
+> deploys as one `CfnPolicy` per statement behind a `CfnPolicyEngine`, attached to the
+> Gateway with `LOG_ONLY`/`ENFORCE` as a **CloudFormation parameter** (§9.4) and
+> `validationMode=FAIL_ON_ANY_FINDINGS` so AWS refuses a policy that does not validate
+> against the schema it generated. `make policy-test`: **36 passed**.
+>
+> **The research changed the design, and the record.** The generated schema exposes
+> `context.input` — the tool's own arguments — and nothing else, and models each MCP
+> tool as its own Cedar action. Six of §9.2's seven illustrative policies read facts
+> that are not in the request and could never have fired. [ADR-024](adr/ADR-024-cedar-expresses-identity-and-shape.md)
+> supersedes that policy set and names where each rule is actually enforced; §9.2 is
+> kept, marked, as the record of what was intended.
+>
+> Remaining for the tick: `make deploy-dev && make integration`, plus the two deployed
+> assertions below.
+
+
 **Build:** `policy/{engine,middleware,context,decisions,gateway}.py` · `policies/cedar/*.cedar` transcribed from ARCHITECTURE §9.2 · AgentCore Policy attachment in `infra/stacks/gateway.py` · deploy-time schema validation of the `.cedar` files against the Gateway's generated schema · `LOG_ONLY` vs `ENFORCING` as a **stack parameter**, not an env var.
 
 **Hermetic done when:** `make policy-test` green — the Cedar files parse and evaluate, and the engine/Cedar divergence test passes.

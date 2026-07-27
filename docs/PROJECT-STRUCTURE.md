@@ -167,14 +167,17 @@ Exactly-once resume is the hazard. `handler.py` must be idempotent per `(thread_
 
 ```
 policy/
-├── engine.py         evaluates a declared Cedar subset in-process — the fast pre-check
-├── middleware.py     LangChain middleware, wrap-style around every tool call
-├── gateway.py        AgentCore Gateway / Policy client (AuthorizeAction, PartiallyAuthorizeActions)
-├── context.py        builds the decision context (subjectCount, holdCount, digest, …)
-└── decisions.py      structured allow/deny logging; feeds the adversarial eval
+├── engine.py         evaluates THE DEPLOYED .cedar files in-process — the fast pre-check
+├── schema.py         reconstructs the Cedar schema from the tool manifest (ADR-018)
+├── decisions.py      structured allow/deny logging; feeds the adversarial eval
+└── middleware.py     LangChain middleware around every tool call        [lands at M7]
 ```
 
-Two layers by design, and only one of them is the control. **AgentCore Policy at the Gateway is authoritative** ([ADR-018](adr/ADR-018-agentcore-policy.md)); `engine.py` is a fast in-process pre-check and a test surface, because in-process enforcement is bypassable by any caller that forgets it. A divergence test asserts the two express identical rules.
+Two layers by design, and only one of them is the control. **AgentCore Policy at the Gateway is authoritative** ([ADR-018](adr/ADR-018-agentcore-policy.md)); `engine.py` is a fast in-process pre-check and a test surface, because in-process enforcement is bypassable by any caller that forgets it.
+
+**There is no divergence test, because there is no second rule set.** Earlier plans had `engine.py` reimplementing "a declared Cedar subset" in Python, with a test to stop the two drifting. `engine.py` instead evaluates the *same* `policies/cedar/*.cedar` the stack deploys, through the same Cedar implementation — drift removed rather than policed ([ADR-024](adr/ADR-024-cedar-expresses-identity-and-shape.md)).
+
+**`gateway.py` and `context.py` do not exist, deliberately.** There is no `AuthorizeAction` call to make: AgentCore Policy evaluates *inside* the Gateway on every tool invocation, and filters `tools/list` per identity server-side — there is no client-side API in the SDK to wrap. And `context.py` would have built a decision context of `subjectCount`/`holdCount`/`digest`, none of which Cedar can read; the only context is the tool's own `context.input`. Writing either would have produced a module that looks like a control and calls nothing.
 
 ### `approval/`, `ledger/`, `observability/`, `cli/`
 
