@@ -237,6 +237,9 @@ Assertions that live in `cdk synth` because a runtime test would be too late:
 - every AgentCore Policy and PolicyEngine `Name` matches the pattern the **installed
   service model** declares — synth validates the template, not the service, so without
   this the rejection arrives from CloudFormation mid-deploy (V10-1)
+- every `Description` in every stack satisfies IAM's `roleDescriptionType` — the
+  narrowest of the per-service constraints, and the one that rejects the em dashes this
+  repo's prose uses everywhere else (V10-2)
 
 ## `evals/`, `seeds/`, `tests/`
 

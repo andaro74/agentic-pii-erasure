@@ -139,7 +139,7 @@ class GatewayStack(Stack):
             "DiscoveryRole",
             role_name=f"asdp-{stage}-discovery",
             assumed_by=iam.ServicePrincipal("bedrock-agentcore.amazonaws.com"),
-            description="ASDP discovery identity — read-only at the Gateway (invariant 1)",
+            description="ASDP discovery identity: read-only at the Gateway (invariant 1)",
         )
         self.discovery_role.add_to_policy(
             iam.PolicyStatement(

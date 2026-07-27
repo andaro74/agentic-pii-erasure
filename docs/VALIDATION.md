@@ -889,6 +889,44 @@ model is evidence; the convention used three files up is not.* `AgentRuntimeName
 the same constraint and lands at M7 — it is already covered by the helper and named in its
 test, so the second occurrence costs nothing.
 
+### 2026-07-27 · V10-2 — a warning I called cosmetic, one commit before it failed the deploy
+
+| ID | Severity | Finding | Resolution |
+|---|---|---|---|
+| **V10-2** | **Medium** | **Four CloudFormation `Description` values contained characters IAM rejects.** The redeploy after V10-1 got past change-set validation and then failed *creating resources*: `Value at 'description' failed to satisfy constraint: Member must satisfy regular expression pattern: [	
+ -~¡-ÿ]*` on `SagaExecutorRole` and `SagaResumeRole`. That range is tab, newline, carriage return, printable ASCII and Latin-1 — an em dash (U+2014) and a horizontal ellipsis (U+2026) are in none of it, and this repo writes both everywhere by house style. | The four descriptions are now ASCII. `tests/unit/test_cfn_descriptions.py` walks **every** `Description` in all four stacks and validates it against IAM's `roleDescriptionType` pattern, read from the installed `iam` service model. |
+
+**I looked straight at this warning and called it cosmetic.** `cdk synth` had been emitting
+three `F3031` annotations naming these exact resources. While fixing V10-1 I checked
+whether they were the same class of defect, reasoned that `SagaResumeRole` had deployed at
+M5 with an ellipsis in its description, and concluded CloudFormation accepted the character
+class. Two of the three premises were wrong: the *Lambda* had deployed with an ellipsis —
+Lambda's `Description` accepts anything — while the **role descriptions were new in M6**,
+added when the roles gained explicit names, and had never been deployed at all. I compared
+the wrong resource and read "it worked before" off a resource type with a different
+constraint.
+
+**The generalisable part is that `Description` constraints are per-service.** The same
+character is a 400 from IAM and a no-op from Lambda, so "this string deployed fine
+somewhere" carries no information about the next resource that gets it. That is why the
+guard is deliberately stricter than any single service demands: every `Description` in
+every template must satisfy IAM's pattern, because IAM's is the narrowest and a
+description is one refactor away from moving between resource types.
+
+**Mutation-tested**, and the second guard matters more than the first: restoring one em
+dash fails `test_every_description_survives_the_narrowest_service_constraint` with the
+offending character quoted, and
+`test_the_pattern_really_does_reject_the_characters_this_repo_writes` fails if the pattern
+is ever loosened into one that matches everything — the vacuous-guard failure mode V9-4
+found the hard way.
+
+**Two findings, one root cause, and it is not the one V10-1 named.** V10-1 concluded that
+synth validates the template and not the service. True, but incomplete: CDK *had* computed
+this one and told me, and the warning was discarded on a bad comparison. So the rule is
+narrower and less comfortable — **a synth warning naming a specific resource is evidence;
+"a similar thing deployed once" is not.** Every `F3031` in this repo is now either fixed or
+a build failure, so the judgement call cannot recur.
+
 1. Read a doc claim as an adversary: *what would make this false, and could the
    named control detect it?*
 2. If the control can't go red, that's a finding — record it here with the fix and

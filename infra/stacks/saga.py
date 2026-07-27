@@ -131,7 +131,7 @@ class SagaStack(Stack):
             name="saga-resume",
             handler="pii_erasure.scheduler.handler.lambda_handler",
             environment=environment,
-            description="ASDP resume: stale-wake filter + dedup, then Command(resume=…)",
+            description="ASDP resume: stale-wake filter + dedup, then Command(resume=...)",
         )
 
         for fn in (self.executor_fn, self.resume_fn):
@@ -184,7 +184,9 @@ class SagaStack(Stack):
                     "service-role/AWSLambdaBasicExecutionRole"
                 )
             ],
-            description=f"ASDP {name} execution role. No bedrock:* — invariant 12.",
+            # ASCII only: IAM's roleDescriptionType forbids the em dash this repo's
+            # prose uses everywhere else. See tests/unit/test_cfn_descriptions.py (V10-2).
+            description=f"ASDP {name} execution role. No bedrock:* - invariant 12.",
         )
         return lambda_.Function(
             self,
