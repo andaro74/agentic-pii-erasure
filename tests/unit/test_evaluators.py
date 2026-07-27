@@ -34,7 +34,13 @@ from evals.evaluators import (
     residual_honesty,
     tool_surface_minimality,
 )
-from evals.run import CORPUS, REQUIRED_RECALL, GateError, _threshold, expected_systems
+from evals.run import (
+    CORPUS,
+    REQUIRED_RECALL,
+    GateError,
+    _threshold,
+    expected_systems,
+)
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -291,3 +297,48 @@ def test_the_corpus_covers_the_false_negative_direction() -> None:
     corpus = json.loads(CORPUS.read_text(encoding="utf-8"))
     targets = " ".join(case["targets"] for case in corpus["cases"]).upper()
     assert "FALSE NEGATIVE" in targets
+
+
+# ─── the harness refuses to grade nothing ─────────────────────────────────────────────
+
+
+def test_a_stale_ground_truth_map_stops_the_run(tmp_path: Path, monkeypatch: Any) -> None:
+    """`hold_detection` over an empty expectation passes having checked zero holds —
+    a green line reporting a certainty it does not have. The harness stops instead.
+
+    This is the same defect class as V9-4's guard that could not go red, arriving
+    through the denominator rather than the assertion.
+    """
+    import evals.run as run
+
+    seeds = tmp_path / "seeds.json"
+    seeds.write_text(
+        json.dumps({"subjects": [{"subjectRef": "sub_a", "holds": [{"holdId": "LIT-1"}]}]}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(run, "SEEDS", seeds)
+    with pytest.raises(GateError, match="graded nothing"):
+        run.assert_holds_are_measurable({"subjects": {"sub_a": {}}})
+
+
+def test_a_map_that_records_its_holds_runs(tmp_path: Path, monkeypatch: Any) -> None:
+    import evals.run as run
+
+    seeds = tmp_path / "seeds.json"
+    seeds.write_text(
+        json.dumps({"subjects": [{"subjectRef": "sub_a", "holds": [{"holdId": "LIT-1"}]}]}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(run, "SEEDS", seeds)
+    run.assert_holds_are_measurable({"subjects": {}, "holds": {"sub_a": ["LIT-1"]}})
+
+
+def test_seeding_no_holds_is_legitimate(tmp_path: Path, monkeypatch: Any) -> None:
+    """ "Nothing to measure" and "measured nothing" are different, and only the second
+    is a defect."""
+    import evals.run as run
+
+    seeds = tmp_path / "seeds.json"
+    seeds.write_text(json.dumps({"subjects": [{"subjectRef": "sub_a"}]}), encoding="utf-8")
+    monkeypatch.setattr(run, "SEEDS", seeds)
+    run.assert_holds_are_measurable({"subjects": {}})

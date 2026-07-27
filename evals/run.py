@@ -93,6 +93,40 @@ def expected_systems(truth: Mapping[str, Any]) -> dict[str, set[str]]:
     return {subject_ref: set(placements) for subject_ref, placements in truth["subjects"].items()}
 
 
+#: Where the seeds declare holds. Read only to detect a STALE ground-truth map — never
+#: to build the denominator, which would be the "echoing the declaration is not
+#: measuring the write" defect V8-12 caught.
+SEEDS = REPO / "seeds" / "meridian.json"
+
+
+def assert_holds_are_measurable(truth: Mapping[str, Any]) -> None:
+    """Refuse to run when `hold_detection` would grade nothing.
+
+    A map emitted before the generator recorded holds has no `holds` key, so
+    `expected_holds` is empty and the evaluator passes having checked zero holds — a
+    green line reporting a certainty it does not have. That is the vacuous-guard defect
+    this repo keeps finding (V9-4, and the recall-scorer tests exist for the same
+    reason), and the fix is to make the harness stop rather than to make the report
+    quieter.
+
+    Distinguishes "no holds seeded" (legitimate; nothing to measure) from "holds seeded
+    but absent from the map" (stale — reseed).
+    """
+    if not SEEDS.is_file():
+        return
+    declared = sum(
+        len(subject.get("holds", []))
+        for subject in json.loads(SEEDS.read_text(encoding="utf-8")).get("subjects", [])
+    )
+    recorded = sum(len(ids) for ids in truth.get("holds", {}).values())
+    if declared and not recorded:
+        raise GateError(
+            f"the seeds declare {declared} legal hold(s) but the ground-truth map records "
+            "none, so hold_detection would pass having graded nothing. The map predates "
+            "the generator recording holds — re-run `make seed` before `make eval`."
+        )
+
+
 def _report(verdicts: Sequence[Verdict], heading: str) -> bool:
     print(f"\n{heading}")
     for verdict in verdicts:
@@ -157,6 +191,7 @@ def run_discovery_suite(*, stage: str, threshold: float) -> int:
     # copied from the seed declaration, so a hold the seeder failed to write cannot
     # fail the agent for missing something that was never there.
     expected_holds = {s: set(h) for s, h in truth.get("holds", {}).items()}
+    assert_holds_are_measurable(truth)
 
     runtime = _stack_outputs(stage, "runtime")
     gateway = _stack_outputs(stage, "gateway")
