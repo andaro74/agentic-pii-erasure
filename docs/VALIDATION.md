@@ -962,6 +962,32 @@ closed hermetically, only shrunk: each one found gets a local guard that would h
 it, driven from the most authoritative artifact available — the service model where one
 exists, the service's own error text where none does.
 
+### 2026-07-27 · V10-4 — attaching an engine makes the Gateway a caller
+
+| ID | Severity | Finding | Resolution |
+|---|---|---|---|
+| **V10-4** | **Medium** | **The Gateway's execution role had no permission to consult the policy engine being attached to it.** The service verified at attach time: `Access denied while calling GetPolicyEngine on Policy Engine … with Gateway role …`. The role was written at M4, when the Gateway's only job was invoking participant Lambdas; M6 gave the Gateway a second job — evaluating Cedar — without giving it the permissions the job needs. Per the AgentCore permissions guide, three actions are required: `GetPolicyEngine` (read the engine's configuration), `AuthorizeAction` (evaluate the policy set per tool call), `PartiallyAuthorizeActions` (filter `tools/list` per identity) — the latter two on **both** the engine and gateway ARNs. | A `PolicyEngineAccess` policy on the Gateway role grants exactly the three, engine by exact ARN. The Gateway ARN is a name-scoped **pattern** (`gateway/asdp-{stage}-gateway-*`), not the exact ARN — deliberately: the grant must exist *before* the Gateway (the service checks at attach), so the exact ARN would be a dependency cycle. `gateway.node.add_dependency(policy_engine_access)` makes the ordering explicit, since CloudFormation cannot infer that an attach-time IAM check depends on an IAM policy elsewhere in the template. Asserted in `test_participants_synth.py`, mutation-tested both ways (drop the dependency; drop an action). |
+
+**The docs contain a sharper warning than the error did, and it is the reason all three
+actions are granted together.** A role missing `GetPolicyEngine` in `LOG_ONLY` mode
+**fails silently** — the engine appears attached, nothing evaluates, and the failure
+surfaces only on the flip to enforcement. That is precisely the decorative-control
+failure mode ADR-018 exists to rule out, and this stack only avoided it because the
+attach-time check happened to hard-fail first. The partial grant is worse than no grant.
+
+**This finding half-rehabilitates a claim ADR-024 demoted.** `AuthorizeAction` and
+`PartiallyAuthorizeActions` are real after all — not as API operations a client calls
+(botocore still has none), but as **IAM actions the Gateway itself must hold** to run its
+internal evaluation. ARCHITECTURE §9.1's description was right in IAM-action terms all
+along; what changed at ADR-024 was only *who the caller is*: the Gateway, never us.
+
+**One more service-side rule sits behind this one, on the *deploying identity* rather
+than the stack:** `CreatePolicy` validates each Cedar statement by calling the Gateway,
+authorized as `bedrock-agentcore:InvokeGateway` on the deployer's credentials. An
+admin-credentialed deploy has it implicitly; a least-privilege CI role would not, and the
+failure names the Gateway while the missing grant is on the caller. Recorded here so it
+is a lookup, not an investigation, when it fires.
+
 1. Read a doc claim as an adversary: *what would make this false, and could the
    named control detect it?*
 2. If the control can't go red, that's a finding — record it here with the fix and

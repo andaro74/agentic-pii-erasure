@@ -31,7 +31,7 @@ the AgentCore developer guide rather than recalled (ROADMAP rule 3).
 
 from __future__ import annotations
 
-from aws_cdk import CfnOutput, CfnParameter, Stack
+from aws_cdk import ArnFormat, CfnOutput, CfnParameter, Stack
 from aws_cdk import aws_bedrockagentcore as agentcore
 from aws_cdk import aws_iam as iam
 from aws_cdk import aws_lambda as lambda_
@@ -97,6 +97,50 @@ class GatewayStack(Stack):
             description="ASDP Cedar policy set for the deletion Gateway",
         )
 
+        # ── The Gateway's own permission to consult the engine (V10-4) ───────
+        # Attaching an engine makes the Gateway a caller: it needs GetPolicyEngine
+        # to read the engine's configuration and AuthorizeAction /
+        # PartiallyAuthorizeActions to evaluate policies and filter tools/list.
+        # The service verifies the first at ATTACH time, so this grant must exist
+        # before the Gateway does — which is why the gateway resource below is a
+        # name-scoped ARN pattern rather than the exact ARN: the exact ARN would
+        # make the grant depend on the Gateway that cannot attach without it.
+        # All three actions are granted together deliberately. The docs warn that
+        # a missing GetPolicyEngine in LOG_ONLY mode fails SILENTLY and surfaces
+        # only on the flip to enforcement — a decorative control, the exact
+        # failure mode ADR-018 exists to rule out.
+        gateway_arn_pattern = self.format_arn(
+            service="bedrock-agentcore",
+            resource="gateway",
+            resource_name=f"asdp-{stage}-gateway-*",
+            arn_format=ArnFormat.SLASH_RESOURCE_NAME,
+        )
+        self.policy_engine_access = iam.Policy(
+            self,
+            "PolicyEngineAccess",
+            statements=[
+                iam.PolicyStatement(
+                    sid="PolicyEngineConfiguration",
+                    actions=["bedrock-agentcore:GetPolicyEngine"],
+                    resources=[self.policy_engine.attr_policy_engine_arn],
+                ),
+                iam.PolicyStatement(
+                    sid="PolicyEngineAuthorization",
+                    actions=[
+                        "bedrock-agentcore:AuthorizeAction",
+                        "bedrock-agentcore:PartiallyAuthorizeActions",
+                    ],
+                    # Both actions need BOTH resources — the docs are explicit
+                    # that omitting either produces "policy engine not found".
+                    resources=[
+                        self.policy_engine.attr_policy_engine_arn,
+                        gateway_arn_pattern,
+                    ],
+                ),
+            ],
+        )
+        self.policy_engine_access.attach_to_role(self.role)
+
         self.gateway = agentcore.CfnGateway(
             self,
             "Gateway",
@@ -120,6 +164,11 @@ class GatewayStack(Stack):
                 )
             ),
         )
+        # The grant above must be in effect when CloudFormation attaches the
+        # engine; CFN cannot infer that from the template, so the dependency is
+        # explicit. Without it the attach races IAM propagation (V10-4).
+        self.gateway.node.add_dependency(self.policy_engine_access)
+
         # ── Ordering: gateway → targets → policies, and it cannot be otherwise ──
         # M6's first cut created the policies before the Gateway, on the assumption
         # that what the Gateway references must exist first. The service refused it

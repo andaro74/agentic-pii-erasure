@@ -372,6 +372,43 @@ def test_every_agentcore_policy_name_is_one_the_control_plane_accepts(
         assert len(name) <= metadata["max"], f"{logical_id}: {name!r} exceeds {metadata['max']}"
 
 
+def test_the_gateway_role_may_consult_the_policy_engine(gateway: Template) -> None:
+    """V10-4. Attaching an engine makes the Gateway a caller: GetPolicyEngine is
+    verified by the service at attach time, and AuthorizeAction /
+    PartiallyAuthorizeActions are exercised on every tool call and every tools/list.
+
+    All three asserted together because the docs warn the partial grant is the worst
+    outcome: without GetPolicyEngine, LOG_ONLY mode fails SILENTLY and surfaces only
+    on the flip to enforcement — a control that looks attached and evaluates nothing.
+    """
+    for policy in gateway.find_resources(
+        "AWS::IAM::Policy",
+        props={"Properties": {"PolicyName": Match.string_like_regexp("PolicyEngineAccess")}},
+    ).values():
+        statements = policy["Properties"]["PolicyDocument"]["Statement"]
+        by_sid = {statement["Sid"]: statement for statement in statements}
+        assert by_sid["PolicyEngineConfiguration"]["Action"] == "bedrock-agentcore:GetPolicyEngine"
+        authz = by_sid["PolicyEngineAuthorization"]
+        assert set(authz["Action"]) == {
+            "bedrock-agentcore:AuthorizeAction",
+            "bedrock-agentcore:PartiallyAuthorizeActions",
+        }
+        # Both actions need BOTH resources: the engine (exact ARN) and the gateway
+        # (name-scoped pattern — the exact ARN would create a dependency cycle with
+        # the attach-time check).
+        assert len(authz["Resource"]) == 2
+        break
+    else:
+        pytest.fail("no PolicyEngineAccess policy attached to the gateway role")
+
+    # And the grant must precede the attach — CloudFormation cannot infer that.
+    gateways = gateway.find_resources("AWS::BedrockAgentCore::Gateway")
+    for resource in gateways.values():
+        assert any("PolicyEngineAccess" in dep for dep in resource.get("DependsOn", [])), (
+            "the Gateway does not depend on the policy-engine grant"
+        )
+
+
 def test_the_discovery_role_the_policies_name_actually_exists(gateway: Template) -> None:
     """A Cedar principal naming a role that does not exist is a permit that can never
     match — and indistinguishable from a wrong policy when you are staring at a deny."""
