@@ -95,6 +95,17 @@ strict = true
 warn_unreachable = true
 plugins = ["pydantic.mypy"]
 
+# numpy arrives transitively (langgraph's serde and langchain-core's vectorstores
+# import it) and its stubs use PEP 695 `type` statements, which mypy cannot parse
+# under python_version = 3.10. Nothing in this repo uses numpy; skipping the whole
+# framework-internal graph is narrower than raising the version floor, and matches
+# how boto3's untyped surface is already treated — the framework edge is one
+# import deep behind the invariant-0 allowlist anyway.
+[[tool.mypy.overrides]]
+module = ["numpy.*", "langgraph.*", "langgraph_checkpoint_aws.*", "langchain_core.*"]
+follow_imports = "skip"
+ignore_missing_imports = true
+
 [[tool.mypy.overrides]]
 module = [
   "langgraph.*",

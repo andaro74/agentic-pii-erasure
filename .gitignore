@@ -230,3 +230,6 @@ infra/cdk.out/
 !infra/build/participants/
 infra/build/participants/*
 !infra/build/participants/.gitkeep
+!infra/build/saga/
+infra/build/saga/*
+!infra/build/saga/.gitkeep

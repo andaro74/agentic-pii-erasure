@@ -16,6 +16,7 @@ from aws_cdk import App
 from stacks.foundation import FoundationStack
 from stacks.gateway import GatewayStack
 from stacks.participants import ParticipantsStack
+from stacks.saga import SagaStack
 
 app = App()
 
@@ -46,6 +47,19 @@ participants = ParticipantsStack(
     object_lock_days=object_lock_days,
     dek_registry=foundation.dek_registry,
     idempotency=foundation.idempotency,
+)
+
+SagaStack(
+    app,
+    f"asdp-{stage}-saga",
+    stage=stage,
+    checkpoints=foundation.checkpoints,
+    checkpoint_offload=foundation.checkpoint_offload,
+    ledger=foundation.ledger,
+    tombstones=foundation.tombstones,
+    idempotency=foundation.idempotency,
+    signing_key=foundation.signing_key,
+    participants=participants.functions,
 )
 
 GatewayStack(

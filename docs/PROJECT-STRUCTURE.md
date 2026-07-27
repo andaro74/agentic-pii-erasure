@@ -117,21 +117,28 @@ saga/
 ├── handler.py          ⚠️ Lambda entrypoint — drives the graph to the next interrupt or END
 ├── graph.py            StateGraph assembly, compile(checkpointer=…)
 ├── state.py            TypedDict state schema + reducers      ← correctness surface
-├── edges.py            conditional routing between phases
+├── edges.py            conditional routing between phases — declarative path maps
 ├── checkpointer.py     DynamoDBSaver (langgraph-checkpoint-aws) + S3 offload
+├── deps.py             the seam: every AWS client the nodes use, injectable for tests
+├── invoker.py          direct Lambda invocation of participants — the M5→M6 seam;
+│                       Cedar-gated Gateway routing replaces it for mutations at M6
 ├── nodes/              ⚠️ deterministic functions — no model client. Invariant 2.
+│   ├── _shared.py          manifest/digest access, the cross-node verify pass
 │   ├── intake.py
 │   ├── hold_check.py
-│   ├── plan.py             invokes the Runtime; signs the returned manifest
+│   ├── plan.py             M5: validates+signs the provided fixture manifest;
+│   │                       M7: invokes the Runtime when none is provided
 │   ├── soft_delete.py      phase 2 · backward recovery
 │   ├── approval_gate.py    interrupt() — the Lambda RETURNS here, for days
 │   ├── grace_window.py     schedules the wake, then interrupts
 │   ├── hold_recheck.py     re-evaluated at phase 3 entry, never cached from phase 1
-│   ├── hard_delete.py      phase 3 · forward recovery only
+│   ├── hard_delete.py      phase 3 · forward only · ONE participant per superstep,
+│   │                       so each receipt checkpoints individually; stuck = DLQ + pause
 │   ├── verify.py
 │   └── sweep.py            T+7 / T+30 resurrection detection
 ├── compensate.py       phase 2 only. Unreachable from phase 3 — asserted by test.
-├── ordering.py         derived→authoritative, children→parents, shred last
+├── ordering.py         derived→authoritative, shred last (ranks position the
+│                       irreversible action, §7.1); revoke-first is structural
 └── tombstone.py        registry blocking re-creation; consulted by all write paths
 ```
 

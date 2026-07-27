@@ -33,8 +33,9 @@ from botocore.exceptions import ClientError
 REPO = Path(__file__).resolve().parents[2]
 STAGE = os.environ.get("PII_ERASURE_STAGE", "dev")
 
-#: Stacks whose Lambda code must match the working tree. Grows with the milestones —
-#: M5's saga executor belongs here the moment it exists.
+#: Stacks whose Lambda code must match the working tree for THIS suite. Conformance
+#: exercises only the participants; the integration suite reuses
+#: `assert_stack_matches_working_tree` below for the saga stack as well.
 CODE_BEARING_STACKS = ("participants",)
 
 _REBUILD = "run `make deploy-dev` (it re-stages the asset and redeploys)"
@@ -77,32 +78,38 @@ def _lambda_asset_keys(template: dict[str, Any]) -> dict[str, str]:
     }
 
 
+def assert_stack_matches_working_tree(stack: str) -> None:
+    """Fail if the deployed stack's Lambda assets differ from the working tree's.
+
+    A stack that is not deployed at all is NOT this check's error to report: callers
+    have friendlier, milestone-aware skips for that case.
+    """
+    deployed = _deployed(stack)
+    if deployed is None:
+        return
+
+    local_keys = _lambda_asset_keys(_synthesised(stack))
+    deployed_keys = _lambda_asset_keys(deployed)
+    stale = {
+        logical: (deployed_keys.get(logical), key)
+        for logical, key in local_keys.items()
+        if deployed_keys.get(logical) != key
+    }
+    if stale:
+        detail = "\n".join(
+            f"  {logical}\n    deployed: {was}\n    working tree: {now}"
+            for logical, (was, now) in sorted(stale.items())
+        )
+        pytest.fail(
+            f"asdp-{STAGE}-{stack} is running code built from a different working "
+            f"tree, so every result below would grade the wrong bytes (V7-2). "
+            f"{_REBUILD}.\n{detail}",
+            pytrace=False,
+        )
+
+
 @pytest.fixture(scope="session", autouse=True)
 def deployed_code_matches_the_working_tree() -> None:
     """Fail the whole session before a single verb is graded, if the bytes disagree."""
     for stack in CODE_BEARING_STACKS:
-        deployed = _deployed(stack)
-        if deployed is None:
-            # Not deployed at all is not this fixture's error to report: the per-participant
-            # fixture skips with a milestone-aware reason, which stays the friendlier signal
-            # for a stack that was never created.
-            continue
-
-        local_keys = _lambda_asset_keys(_synthesised(stack))
-        deployed_keys = _lambda_asset_keys(deployed)
-        stale = {
-            logical: (deployed_keys.get(logical), key)
-            for logical, key in local_keys.items()
-            if deployed_keys.get(logical) != key
-        }
-        if stale:
-            detail = "\n".join(
-                f"  {logical}\n    deployed: {was}\n    working tree: {now}"
-                for logical, (was, now) in sorted(stale.items())
-            )
-            pytest.fail(
-                f"asdp-{STAGE}-{stack} is running code built from a different working "
-                f"tree, so every result below would grade the wrong bytes (V7-2). "
-                f"{_REBUILD}.\n{detail}",
-                pytrace=False,
-            )
+        assert_stack_matches_working_tree(stack)

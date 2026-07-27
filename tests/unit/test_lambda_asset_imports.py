@@ -44,6 +44,11 @@ DISTRIBUTION = "agentic-pii-erasure"
 
 #: Modules a Lambda cold start actually imports. Handlers are the entry points; the CLI is
 #: deliberately absent, because it is the one component that *is* always pip-installed.
+#: The saga-plane entry points (M5) are probed the same way — their asset is a copied
+#: source tree exactly like the participants', and V7-1 applies to it identically.
+_SAGA_ENTRYPOINTS = ("saga/handler.py", "scheduler/handler.py")
+
+
 def _handler_modules() -> list[str]:
     built = [
         spec
@@ -51,9 +56,15 @@ def _handler_modules() -> list[str]:
         if (PACKAGE / "participants" / spec.system_id.replace("-", "_") / "handler.py").is_file()
     ]
     assert built, "no participant handlers found — the test is looking in the wrong place"
-    return [
+    modules = [
         f"pii_erasure.participants.{spec.system_id.replace('-', '_')}.handler" for spec in built
     ]
+    modules.extend(
+        "pii_erasure." + entry.removesuffix(".py").replace("/", ".")
+        for entry in _SAGA_ENTRYPOINTS
+        if (PACKAGE / entry).is_file()
+    )
+    return modules
 
 
 _PROBE = textwrap.dedent(

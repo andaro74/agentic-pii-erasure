@@ -137,23 +137,42 @@ RESOLVE_STAGE = stage="$(STAGE)"; stage="$${stage:-$${PII_ERASURE_STAGE:-dev}}"
 # is what makes that failure loud at build time instead of at conformance time.
 # No Docker: `cdk synth` stays hermetic, and this target only runs before a deploy.
 LAMBDA_ASSET := infra/build/participants
+SAGA_ASSET := infra/build/saga
 LAMBDA_PLATFORM := manylinux2014_x86_64
 LAMBDA_PY := 3.12
+# The saga asset's framework pins MUST match pyproject.toml exactly (invariant 9) —
+# a unit test compares these strings against the pyproject pins verbatim, so a bump
+# that touches only one of the two fails `make check` instead of deploying a Lambda
+# whose checkpoint serialization differs from the one the tests exercised.
+SAGA_PINS := "langgraph==1.2.9" "langgraph-checkpoint-aws==1.2.0"
 
 .PHONY: package
-package: ## Stage the participant Lambda asset (handler code + deps). Runs before deploy.
-	@# Clear the staging dir but KEEP .gitkeep: it is a tracked file, and an
+package: ## Stage both Lambda assets (participants + saga). Runs before deploy.
+	@# Clear the staging dirs but KEEP .gitkeep: it is a tracked file, and an
 	@# `rm -rf` here shows up as a deletion that a careless `git add -A` commits,
 	@# which breaks `cdk synth` for the next person to clone without packaging.
-	@mkdir -p $(LAMBDA_ASSET)
+	@mkdir -p $(LAMBDA_ASSET) $(SAGA_ASSET)
 	@find $(LAMBDA_ASSET) -mindepth 1 -maxdepth 1 ! -name .gitkeep -exec rm -rf {} +
+	@find $(SAGA_ASSET) -mindepth 1 -maxdepth 1 ! -name .gitkeep -exec rm -rf {} +
 	$(PY) -m pip install --quiet --target $(LAMBDA_ASSET) \
 		--platform $(LAMBDA_PLATFORM) --python-version $(LAMBDA_PY) \
 		--implementation cp --only-binary=:all: \
 		"pydantic>=2.9,<3" "structlog>=24.1"
 	@cp -r src/pii_erasure $(LAMBDA_ASSET)/
-	@find $(LAMBDA_ASSET) -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true
-	@echo "✅ staged $(LAMBDA_ASSET) ($$(du -sh $(LAMBDA_ASSET) | cut -f1))"
+	@# -c requirements.lock: the transitive layer under the invariant-9 pins includes
+	@# ormsgpack — the checkpoint serializer's wire format. The asset must ship the
+	@# exact versions the test suite ran against, not whatever resolves freshest.
+	$(PY) -m pip install --quiet --target $(SAGA_ASSET) \
+		--platform $(LAMBDA_PLATFORM) --python-version $(LAMBDA_PY) \
+		--implementation cp --only-binary=:all: \
+		-c requirements.lock \
+		"pydantic>=2.9,<3" "structlog>=24.1" $(SAGA_PINS)
+	@# The Lambda runtime ships boto3/botocore; bundling a second copy doubles the
+	@# asset for zero benefit. The saga's own AWS calls run fine on the runtime's.
+	@rm -rf $(SAGA_ASSET)/boto3* $(SAGA_ASSET)/botocore*
+	@cp -r src/pii_erasure $(SAGA_ASSET)/
+	@find $(LAMBDA_ASSET) $(SAGA_ASSET) -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true
+	@echo "✅ staged $(LAMBDA_ASSET) ($$(du -sh $(LAMBDA_ASSET) | cut -f1)) + $(SAGA_ASSET) ($$(du -sh $(SAGA_ASSET) | cut -f1))"
 
 .PHONY: bootstrap
 bootstrap: ## ⚠️ ONE-TIME per account+region: create the CDK toolkit stack. Human-only.
@@ -273,7 +292,10 @@ conformance: package synth ## 5 verbs x 8 participants, against the deployed sta
 	else echo "⏳ lands at M2 — docs/ROADMAP.md"; fi
 
 .PHONY: integration
-integration: ## Deployed: manifest signing vs the real CMK (M3) + full saga (M5)
+integration: package synth ## Deployed: manifest signing vs the real CMK (M3) + full saga (M5)
+	@# `package synth` for the same reason as conformance: the suite's preflight
+	@# compares working-tree asset hashes against the deployed participants AND saga
+	@# stacks, and that comparison is only meaningful if both sides are current (V7-2).
 	@if ls tests/integration/test_*.py >/dev/null 2>&1; then \
 		$(PYTEST) tests/integration -m integration; \
 	else echo "⏳ lands at M5 — docs/ROADMAP.md"; fi

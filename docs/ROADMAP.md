@@ -103,6 +103,16 @@ There is no local mode ([ADR-017](adr/ADR-017-real-aws-participants.md)), so fro
 
 ## - [ ] M5 · The saga (LangGraph core — no model anywhere)
 
+> **Hermetic half landed 2026-07-26.** The full graph (11 nodes incl. `compensate`),
+> reducers with concurrent-write tests, digest-bound KMS approval tokens, the
+> hash-chained ledger, EventBridge one-shot scheduling with a stale-wake-filtering +
+> deduplicating resume Lambda, and `infra/stacks/saga.py` (no `bedrock:*`, no VPC —
+> synth-asserted). Phase 3 runs ONE participant per superstep so each receipt
+> checkpoints individually; a stuck participant is DLQ + a pause at the `stuck` gate
+> (the diagram's "manual remediation" arc), never a rollback. Remaining for the tick:
+> `make deploy-dev && make integration` — four scenarios, ~15–25 min, dominated by
+> Athena and the first Aurora resume.
+
 **Goal:** the StateGraph executes a **hand-written fixture manifest** end to end, in Lambda, checkpointed to DynamoDB. [ADR-001](adr/ADR-001-agent-proposes-saga-disposes.md) makes this possible: the saga replays manifests, so it is fully testable before discovery exists. Say that in the article.
 
 **Build:** `saga/{state,graph,edges,checkpointer,handler}.py` + `nodes/` (intake, hold_check, plan, soft_delete, approval_gate with `interrupt()`, grace_window, **hold_recheck**, hard_delete, verify, sweep) · `compensate.py`, `ordering.py`, `tombstone.py` · `scheduler/{base,eventbridge,handler}.py` · `approval/{gate,tokens}.py` · `ledger/{chain,writer,verify}.py` · `infra/stacks/saga.py`.
