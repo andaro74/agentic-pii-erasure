@@ -988,6 +988,33 @@ admin-credentialed deploy has it implicitly; a least-privilege CI role would not
 failure names the Gateway while the missing grant is on the caller. Recorded here so it
 is a lookup, not an investigation, when it fires.
 
+### 2026-07-27 · M6 complete
+
+The deployed gate ran in `ENFORCE` (flipped via `POLICY_MODE=ENFORCE make deploy-dev`, a
+deploy and therefore a CloudTrail event, per §9.4 — riskless before M7 because nothing
+legitimate traverses the Gateway yet). `make integration` stayed green, confirming the
+saga plane is untouched by policy, and `scripts/verify_policy_gate.py` passed both
+probes as a SigV4-signed MCP caller whose identity appears in no Cedar permit:
+`tools/list` returned an **empty tool surface** (deny-by-default made visible), and
+`profile-store___hard_delete` with an empty approval token was **denied at the
+Gateway** — the participant Lambda never invoked.
+
+**One deploy of this milestone found four service-side rules** (V10-1 through V10-4),
+none reachable by `make check` as it stood: a name pattern, a description character
+class, a Cedar scoping rule in CreatePolicy's parser, and an attach-time IAM
+verification. The pattern across them is the ADR-017 lesson again at the control plane:
+the hermetic gate models the code; the world keeps declaring constraints in places only
+a deploy visits. Each now has a hermetic guard driven from the most authoritative local
+artifact — the installed service model where one exists, the service's own error text
+where none does — and each guard was mutation-tested before it was trusted.
+
+**Two of the gate's own assertions were drift, corrected on the record** (ROADMAP M6
+note): the saga never traverses the Gateway, so "saga halts" was unfalsifiable; and
+`asdp-discovery` is assumable only by `bedrock-agentcore.amazonaws.com`, so its
+`tools/list` surface has no possible caller until M7's Runtime. The discovery-surface
+claim is asserted hermetically today and lands deployed as M7's
+`tool_surface_minimality` evaluator.
+
 1. Read a doc claim as an adversary: *what would make this false, and could the
    named control detect it?*
 2. If the control can't go red, that's a finding — record it here with the fix and

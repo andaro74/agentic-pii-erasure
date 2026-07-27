@@ -135,13 +135,13 @@ There is no local mode ([ADR-017](adr/ADR-017-real-aws-participants.md)), so fro
 
 **Traps:** invariant 2 (no model client under `nodes/` — there's a test, and now an IAM denial) · invariant 6 (`restore` unreachable from phase 3) · invariant 10 (**every reducer gets a concurrent-write test** — a wrong reducer surfaces as a recall failure, not a crash) · invariant 11 (the resume handler is idempotent per `(thread_id, wake_reason)`; EventBridge Scheduler delivers at least once) · `thread_id` == `sagaId` · verify `interrupt()`/`Command(resume=…)` and `DynamoDBSaver`'s constructor against the installed pins before writing a line.
 
-## - [ ] M6 · Policy
+## - [x] M6 · Policy
 
-> **Hermetic half landed 2026-07-27.** The five-file Cedar set in `policies/cedar/`
-> deploys as one `CfnPolicy` per statement behind a `CfnPolicyEngine`, attached to the
-> Gateway with `LOG_ONLY`/`ENFORCE` as a **CloudFormation parameter** (§9.4) and
-> `validationMode=FAIL_ON_ANY_FINDINGS` so AWS refuses a policy that does not validate
-> against the schema it generated. `make policy-test`: **36 passed**.
+> **Complete 2026-07-27.** The five-file Cedar set in `policies/cedar/` deploys as one
+> `CfnPolicy` per statement behind a `CfnPolicyEngine`, each pinned to the one Gateway
+> it governs, attached with `LOG_ONLY`/`ENFORCE` as a **CloudFormation parameter**
+> (§9.4) and `validationMode=FAIL_ON_ANY_FINDINGS` so AWS refuses a policy that does
+> not validate against the schema it generated. `make policy-test`: **42 passed**.
 >
 > **The research changed the design, and the record.** The generated schema exposes
 > `context.input` — the tool's own arguments — and nothing else, and models each MCP
@@ -150,8 +150,18 @@ There is no local mode ([ADR-017](adr/ADR-017-real-aws-participants.md)), so fro
 > supersedes that policy set and names where each rule is actually enforced; §9.2 is
 > kept, marked, as the record of what was intended.
 >
-> Remaining for the tick: `make deploy-dev && make integration`, plus the two deployed
-> assertions below.
+> **The deploy taught four service-side rules the hermetic gate could not know**
+> (VALIDATION V10-1..V10-4): Policy names take underscores; IAM rejects em dashes in
+> descriptions; a tool-specific policy must pin its gateway ARN, which inverts the
+> creation order to gateway → targets → policies; and attaching an engine makes the
+> Gateway a caller needing `GetPolicyEngine` + `AuthorizeAction` +
+> `PartiallyAuthorizeActions`. Each got a hermetic guard driven from the most
+> authoritative artifact available, mutation-tested.
+>
+> **Deployed gate run 2026-07-27 in `ENFORCE`**: `make integration` green, and
+> `scripts/verify_policy_gate.py` PASS on both probes — `tools/list` for an
+> unpermitted identity returns an **empty surface**, and `hard_delete` with an empty
+> approval token is **denied at the Gateway**, participant never invoked.
 
 
 **Build:** `policy/{engine,middleware,context,decisions,gateway}.py` · `policies/cedar/*.cedar` transcribed from ARCHITECTURE §9.2 · AgentCore Policy attachment in `infra/stacks/gateway.py` · deploy-time schema validation of the `.cedar` files against the Gateway's generated schema · `LOG_ONLY` vs `ENFORCING` as a **stack parameter**, not an env var.
