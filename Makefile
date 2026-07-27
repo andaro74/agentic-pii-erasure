@@ -148,6 +148,12 @@ RUNTIME_ASSET := infra/build/runtime
 RUNTIME_PLATFORMS := manylinux_2_28_aarch64 manylinux2014_aarch64
 RUNTIME_PY := 3.13
 RUNTIME_ENTRYPOINT := entrypoint.py
+
+# Every staged deploy asset, in ONE place. The cleanup steps below all iterate this:
+# V10-5 was three hand-maintained lists (bin/, RECORD, __pycache__) and a fourth asset
+# that only made it into two of them. A list that must be updated in N places is a
+# list that will be updated in N-1.
+ASSETS := $(LAMBDA_ASSET) $(SAGA_ASSET) $(RUNTIME_ASSET)
 # The saga asset's framework pins MUST match pyproject.toml exactly (invariant 9) —
 # a unit test compares these strings against the pyproject pins verbatim, so a bump
 # that touches only one of the two fails `make check` instead of deploying a Lambda
@@ -197,7 +203,13 @@ package: ## Stage the deploy assets (participants + saga + discovery Runtime).
 	@# the zip root under the exact name the stack declares, and a synth assertion
 	@# pins the two together.
 	@cp src/pii_erasure/runtime/entrypoint.py $(RUNTIME_ASSET)/$(RUNTIME_ENTRYPOINT)
-	@find $(LAMBDA_ASSET) $(SAGA_ASSET) -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true
+	@# AgentCore Runtime REFUSES an artifact carrying these outright ("Python cache
+	@# files that are incompatible with the target runtime") — x86 Windows bytecode
+	@# does not run on arm64 Linux, and pip byte-compiles on install by default. For
+	@# the Lambda assets the same files were merely non-deterministic; here they are
+	@# a failed deploy. Same strip, higher stakes (V10-5).
+	@find $(ASSETS) -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true
+	@find $(ASSETS) -name '*.pyc' -o -name '*.pyo' -delete 2>/dev/null || true
 	@# ── console scripts must not ship (V9-1) ─────────────────────────────────
 	@# `pip install --target` materialises entry-point wrappers into bin/ even under
 	@# --platform: Windows .exe launchers (a zip with a stub prepended, carrying an
@@ -208,8 +220,8 @@ package: ## Stage the deploy assets (participants + saga + discovery Runtime).
 	@# staleness preflight report drift that does not exist. Stripping them is what
 	@# makes the asset a function of the SOURCE rather than of the build machine and
 	@# the minute it ran. The RECORD filter keeps the metadata honest about it.
-	@rm -rf $(LAMBDA_ASSET)/bin $(SAGA_ASSET)/bin $(RUNTIME_ASSET)/bin
-	@find $(LAMBDA_ASSET) $(SAGA_ASSET) $(RUNTIME_ASSET) -name RECORD -exec sed -i '\|^\.\..*/bin/|d' {} + 2>/dev/null || true
+	@rm -rf $(addsuffix /bin,$(ASSETS))
+	@find $(ASSETS) -name RECORD -exec sed -i '\|^\.\..*/bin/|d' {} + 2>/dev/null || true
 	@echo "✅ staged $(LAMBDA_ASSET) ($$(du -sh $(LAMBDA_ASSET) | cut -f1)) + $(SAGA_ASSET) ($$(du -sh $(SAGA_ASSET) | cut -f1)) + $(RUNTIME_ASSET) ($$(du -sh $(RUNTIME_ASSET) | cut -f1))"
 
 .PHONY: bootstrap

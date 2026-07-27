@@ -233,3 +233,10 @@ infra/build/participants/*
 !infra/build/saga/
 infra/build/saga/*
 !infra/build/saga/.gitkeep
+!infra/build/runtime/
+infra/build/runtime/*
+!infra/build/runtime/.gitkeep
+# Three rules per asset, and a new asset that gets none is not merely untracked — it
+# is untracked AND unignored, so `git add -A` commits 131 MB of vendored langchain
+# and ruff lints third-party source. `tests/unit/test_lambda_asset_determinism.py`
+# asserts every declared asset has all three (V10-5).

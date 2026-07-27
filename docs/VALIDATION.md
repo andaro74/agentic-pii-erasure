@@ -894,7 +894,8 @@ test, so the second occurrence costs nothing.
 | ID | Severity | Finding | Resolution |
 |---|---|---|---|
 | **V10-2** | **Medium** | **Four CloudFormation `Description` values contained characters IAM rejects.** The redeploy after V10-1 got past change-set validation and then failed *creating resources*: `Value at 'description' failed to satisfy constraint: Member must satisfy regular expression pattern: [	
- -~¡-ÿ]*` on `SagaExecutorRole` and `SagaResumeRole`. That range is tab, newline, carriage return, printable ASCII and Latin-1 — an em dash (U+2014) and a horizontal ellipsis (U+2026) are in none of it, and this repo writes both everywhere by house style. | The four descriptions are now ASCII. `tests/unit/test_cfn_descriptions.py` walks **every** `Description` in all four stacks and validates it against IAM's `roleDescriptionType` pattern, read from the installed `iam` service model. |
+
+ -~¡-ÿ]*` on `SagaExecutorRole` and `SagaResumeRole`. That range is tab, newline, carriage return, printable ASCII and Latin-1 — an em dash (U+2014) and a horizontal ellipsis (U+2026) are in none of it, and this repo writes both everywhere by house style. | The four descriptions are now ASCII. `tests/unit/test_cfn_descriptions.py` walks **every** `Description` in all four stacks and validates it against IAM's `roleDescriptionType` pattern, read from the installed `iam` service model. |
 
 **I looked straight at this warning and called it cosmetic.** `cdk synth` had been emitting
 three `F3031` annotations naming these exact resources. While fixing V10-1 I checked
@@ -1014,6 +1015,40 @@ note): the saga never traverses the Gateway, so "saga halts" was unfalsifiable; 
 `tools/list` surface has no possible caller until M7's Runtime. The discovery-surface
 claim is asserted hermetically today and lands deployed as M7's
 `tool_surface_minimality` evaluator.
+
+### 2026-07-27 · V10-5 — the per-asset lists that only covered two of three assets
+
+| ID | Severity | Finding | Resolution |
+|---|---|---|---|
+| **V10-5** | **Medium** | **The discovery Runtime asset shipped `__pycache__`, and AgentCore Runtime refuses it outright**: *"Your artifact contains Python cache files that are incompatible with the target runtime."* 270 cache directories and 1,864 `.pyc` files — x86 Windows bytecode in an arm64 Linux runtime, because pip byte-compiles on install by default. `make package` already stripped them; the strip named `$(LAMBDA_ASSET) $(SAGA_ASSET)` and M7 added a third asset. The `bin/` and `RECORD` cleanups were extended for it. This one was not. | One `ASSETS` list in the Makefile, iterated by all three cleanup steps, plus an explicit `*.pyc` sweep. `tests/unit/test_lambda_asset_determinism.py` now **derives** its asset tuple from the Makefile instead of hardcoding it, and asserts every declared `*_ASSET` appears in `ASSETS`. |
+| **V10-5b** | **Medium** | **The same asset was untracked *and unignored*.** `.gitignore` carries three rules per asset — un-ignore the directory, ignore its contents, un-ignore `.gitkeep` — and the new one had none. `git add -A` would have committed **131 MB of vendored `langchain`**; the commit that landed M7 escaped only because it ran before `make package` did. | The three rules added, and guarded: `test_every_declared_asset_is_gitignored_except_its_marker` walks the same derived list. |
+
+**Both halves are one defect: a per-asset list maintained by hand in four places.** The
+Makefile had three (`bin/`, `RECORD`, `__pycache__`), `.gitignore` had a fourth, and the
+new asset made it into two of the four. The fix is not "remember harder" — it is that
+the list is now declared once and every consumer derives from it, including the test.
+
+**The stakes differ per asset, which is why this hid.** For a Lambda asset stray
+bytecode was merely non-deterministic (V9-1) — annoying, and the reason the strip
+existed at all. For AgentCore Runtime it is a hard `CREATE_FAILED`. The same missing
+line was a nuisance in one place and a failed deploy in another.
+
+**V10-5b surfaced sideways, which is worth recording.** It did not announce itself as a
+packaging bug: `make fmt` began reporting `N818` and `SIM105` on *botocore*, because
+ruff respects `.gitignore` and the vendored tree was no longer hidden. Lint errors in
+third-party source are a strange symptom for "an asset lacks an ignore rule", and the
+distance between symptom and cause is the argument for the guard.
+
+**Mutation-tested both:** dropping `RUNTIME_ASSET` from `ASSETS` fails the coverage
+assertion by name; removing the three `.gitignore` lines fails the ignore assertion.
+
+**And it was in the docs I had already read.** The AgentCore direct-code-deployment
+guide says plainly: *"We recommend that you don't include `__pycache__` folders in your
+agent's deployment package. Python bytecode that's compiled on a build machine with a
+different architecture or operating system might not be compatible."* I read that page
+while establishing the arm64 platform tag — and acted on the tag, which was the
+interesting finding, while the adjacent warning went unwired. Reading the constraint is
+not the control; the control is the line in the recipe and the test that keeps it there.
 
 1. Read a doc claim as an adversary: *what would make this false, and could the
    named control detect it?*
