@@ -172,6 +172,18 @@ package: ## Stage both Lambda assets (participants + saga). Runs before deploy.
 	@rm -rf $(SAGA_ASSET)/boto3* $(SAGA_ASSET)/botocore*
 	@cp -r src/pii_erasure $(SAGA_ASSET)/
 	@find $(LAMBDA_ASSET) $(SAGA_ASSET) -name __pycache__ -type d -prune -exec rm -rf {} + 2>/dev/null || true
+	@# ── console scripts must not ship (V9-1) ─────────────────────────────────
+	@# `pip install --target` materialises entry-point wrappers into bin/ even under
+	@# --platform: Windows .exe launchers (a zip with a stub prepended, carrying an
+	@# embedded timestamp) and POSIX scripts whose shebang is the BUILD machine's
+	@# interpreter path. Nothing in Lambda ever runs a console script, so they are
+	@# dead weight — but the real damage is that the .exe bytes differ on every
+	@# build, which makes the CDK asset hash non-deterministic and the deployed-code
+	@# staleness preflight report drift that does not exist. Stripping them is what
+	@# makes the asset a function of the SOURCE rather than of the build machine and
+	@# the minute it ran. The RECORD filter keeps the metadata honest about it.
+	@rm -rf $(LAMBDA_ASSET)/bin $(SAGA_ASSET)/bin
+	@find $(LAMBDA_ASSET) $(SAGA_ASSET) -name RECORD -exec sed -i '\|^\.\..*/bin/|d' {} + 2>/dev/null || true
 	@echo "✅ staged $(LAMBDA_ASSET) ($$(du -sh $(LAMBDA_ASSET) | cut -f1)) + $(SAGA_ASSET) ($$(du -sh $(SAGA_ASSET) | cut -f1))"
 
 .PHONY: bootstrap

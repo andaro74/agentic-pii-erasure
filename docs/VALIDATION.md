@@ -729,6 +729,45 @@ tests skip with a reason naming the fix (production access) — a gate that goes
 the moment the capability exists, not a silencing guard. Expected shape: 56 passed /
 8 skipped in the sandbox; 64 passed / 0 skipped once production access lands.
 
+### 2026-07-27 · M5's deployed gate, and the control that cried wolf
+
+| ID | Severity | Finding | Resolution |
+|---|---|---|---|
+| **V9-1** | **High** | The saga Lambda asset was **non-deterministic**, so `make integration` failed its own V7-2 staleness preflight on a stack that had just been deployed successfully. `pip install --target` materialises entry-point wrappers into `bin/` even under `--platform`: Windows `.exe` launchers are a zip with a stub prepended, and the embedded zip timestamp changes the bytes on **every build**; POSIX console scripts embed the **build machine's** interpreter path. Ten files (5 wrappers + the 5 `RECORD`s listing them) changed per rebuild, so the CDK asset hash identified the *build*, not the *source*. | `make package` strips `bin/` from both assets and filters the stripped entries out of `dist-info/RECORD`. Verified by measurement: two full package+synth cycles now produce byte-identical asset hashes (`d576d6ad…` twice), where before they differed (`12fe207d…` deployed vs `0c6d9e43…` rebuilt). Guarded by `tests/unit/test_lambda_asset_determinism.py`. |
+
+**This is V7-2's mirror image, and that is the interesting part.** V7-2 was a control that
+stayed *silent* while the deployed bytes drifted from the working tree — it missed a real
+failure. V9-1 is the same control *firing on a difference that was not a source change at
+all*. Both produce the same class of damage: the operator is sent to investigate the wrong
+thing. A gate that cannot pass is not a strict gate, it is a broken one, and the temptation
+it creates — exempt the saga stack from the preflight — would have quietly restored V7-2 for
+the one stack whose staleness is most expensive to miss.
+
+**The load-bearing distinction: an artifact must be a function of its source.** The asset
+hash is the right fingerprint precisely because CDK derives it from content; that only holds
+if the content is derived from the source and nothing else. Console-script wrappers made it
+a function of the machine and the minute. Stripping them is not a workaround for the
+checksum — they were never correct to ship: nothing in Lambda runs a console script, and
+five Windows PE binaries were being uploaded to a Linux runtime.
+
+**Why the participants asset never showed this.** It vendors only `pydantic` and
+`structlog`, neither of which declares console scripts, so `bin/` was never created and the
+conformance preflight has been honest all along. The defect appeared with the first
+dependency set that had entry points — which is also why the guard covers *both* assets
+rather than the one that broke.
+
+**Cross-machine, not just cross-build.** The POSIX half of the same defect would have
+struck CI even if the timestamps had been stable: a shebang naming the build machine's
+interpreter makes the hash differ between a Windows developer and a Linux runner, so the
+preflight would have failed for everyone whose machine did not build the deployment.
+Stripping `bin/` removes both halves. Verified locally across rebuilds; the cross-platform
+half is asserted structurally (no host-specific artifacts survive packaging) rather than
+demonstrated, since this session had one platform available.
+
+**Mutation-tested both ways**: restoring a `bin/httpx.exe` fails the staged-asset checks,
+and removing the strip step from the Makefile fails the recipe check. Reverting each
+restores green.
+
 1. Read a doc claim as an adversary: *what would make this false, and could the
    named control detect it?*
 2. If the control can't go red, that's a finding — record it here with the fix and
