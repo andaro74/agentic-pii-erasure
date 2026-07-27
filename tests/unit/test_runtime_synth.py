@@ -19,6 +19,7 @@ invocation. Three things must agree — the Makefile's `RUNTIME_ENTRYPOINT`, the
 
 from __future__ import annotations
 
+import json
 import re
 import sys
 from pathlib import Path
@@ -155,22 +156,42 @@ def test_the_runtime_is_the_only_bedrock_caller(runtime_template: Template) -> N
     assert all(a.startswith("bedrock:InvokeModel") for a in bedrock)
 
 
-def test_the_discovery_role_may_reach_the_gateway(gateway_template: Template) -> None:
-    """The single route to subject data, asserted where the grant lives.
+def test_the_discovery_role_may_reach_the_gateway(runtime_template: Template) -> None:
+    """The single route to subject data, and the export keep-alive (V10-7).
 
-    It moved to the gateway stack with the role (V10-6) — the grant did not disappear,
-    and a test that kept looking in the runtime template would have gone red for the
-    right reason and been "fixed" by deleting it.
+    Lives in the runtime stack's permission policy: every permission the reasoning
+    plane holds is then readable in one place, and referencing the Gateway ARN keeps
+    its cross-stack export in use.
     """
     grants = [
         statement
-        for policy in gateway_template.find_resources("AWS::IAM::Policy").values()
+        for policy in runtime_template.find_resources("AWS::IAM::Policy").values()
         for statement in policy["Properties"]["PolicyDocument"]["Statement"]
         if "bedrock-agentcore:InvokeGateway" in str(statement.get("Action", ""))
     ]
     assert grants, "the discovery identity cannot reach the Gateway at all"
     for statement in grants:
         assert statement["Resource"] != "*", "the Gateway grant must name one gateway"
+
+
+def test_the_runtime_still_imports_the_gateway_arn(runtime_template: Template) -> None:
+    """V10-7: dropping the LAST reference to a cross-stack export is a deadlock.
+
+    Moving the Gateway grant out of this stack left `gateway_arn` unused, so CDK
+    stopped exporting it from the gateway stack — while the deployed runtime stack
+    still imported it. CloudFormation refused: *"Cannot delete export … as it is in
+    use by asdp-dev-runtime"*, the update rolled back, and the rollback could not
+    complete either.
+
+    `cdk synth` cannot see this: both templates are individually valid, and the
+    conflict exists only between the new template and the *deployed* one. What is
+    checkable hermetically is that the reference still exists at all.
+    """
+    rendered = json.dumps(runtime_template.to_json())
+    assert "GatewayGatewayArn" in rendered, (
+        "the runtime stack no longer imports the Gateway ARN — if the deployed stack "
+        "still imports it, the next update deadlocks on the export (V10-7)"
+    )
 
 
 # ─── ADR-025: the zip, and the filename nobody validates ─────────────────────────────

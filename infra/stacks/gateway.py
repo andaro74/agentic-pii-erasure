@@ -208,12 +208,10 @@ class GatewayStack(Stack):
             ),
             description="ASDP discovery identity: read-only at the Gateway (invariant 1)",
         )
-        self.discovery_role.add_to_policy(
-            iam.PolicyStatement(
-                actions=["bedrock-agentcore:InvokeGateway"],
-                resources=[self.gateway.attr_gateway_arn],
-            )
-        )
+        # No inline policy here on purpose. This role is the Cedar *principal*; its
+        # permissions are attached by the runtime stack that actually assumes it, so
+        # everything the reasoning plane can do is readable in one policy (V10-6/7).
+        # A role with no permissions still resolves a Cedar principal perfectly well.
 
         self.targets: dict[str, agentcore.CfnGatewayTarget] = {}
         for system_id, function in participants.items():

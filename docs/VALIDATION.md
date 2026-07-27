@@ -1087,6 +1087,33 @@ the principal that will actually arrive, and "the deploy succeeded" says nothing
 whether a permit can match. V10-1 through V10-4 were rules only the service knew. This
 one was a rule *we* wrote, in two files, that disagreed with itself.
 
+### 2026-07-27 · V10-7 — dropping the last reference to a cross-stack export
+
+| ID | Severity | Finding | Resolution |
+|---|---|---|---|
+| **V10-7** | **Medium** | **`asdp-dev-gateway` rolled back, and the rollback could not complete either.** Fixing V10-6 moved the `InvokeGateway` grant out of the runtime stack, which left `gateway_arn` an unused parameter — so CDK stopped exporting `GatewayArn` from the gateway stack. The **deployed** runtime stack still imported it: *"Delete canceled. Cannot delete export asdp-dev-gateway:ExportsOutputFnGetAttGatewayGatewayArn… as it is in use by asdp-dev-runtime."* The stack landed in `UPDATE_ROLLBACK_COMPLETE`. | The grant moved back into the runtime stack's permission policy — where it arguably belongs anyway, since every permission the reasoning plane holds is then readable in one place — which restores the reference and the export. `test_the_runtime_still_imports_the_gateway_arn` asserts the reference survives. |
+
+**`cdk synth` structurally cannot catch this, and that is the interesting part.** Both
+templates are individually valid. The conflict exists only between the *new* template and
+the *deployed* one, and synth has never seen the deployed one. This is the same blind
+spot as V10-1 (synth validates the template, not the service) arriving from the opposite
+direction: not a rule the service knows and we do not, but a fact about **history** —
+what is currently out there — that a stateless render cannot consult.
+
+The hermetic half that *is* checkable is narrower and worth having anyway: the reference
+still exists at all. A test cannot know what the deployed stack imports, but it can
+notice when the last consumer of a cross-stack value disappears, which is the moment the
+deadlock becomes possible.
+
+**Mutation-tested**: removing the Gateway grant fails both the export guard and the
+security assertion — the same edit that caused this, caught by two tests for two reasons.
+
+**The self-inflicted pattern is worth naming.** V10-6's fix caused V10-7. Moving a grant
+between stacks is not a refactor; it is a change to the dependency graph, and the
+dependency graph has a deployed instance with opinions. The lesson is not "move fewer
+things" — it is that a cross-stack move needs the *export* consequences thought through
+before the deploy, in the same way V10-3 needed the creation order thought through.
+
 1. Read a doc claim as an adversary: *what would make this false, and could the
    named control detect it?*
 2. If the control can't go red, that's a finding — record it here with the fix and

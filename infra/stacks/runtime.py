@@ -141,6 +141,18 @@ class RuntimeStack(Stack):
                         ),
                     ],
                 ),
+                # The single route to subject data: through the Gateway, where
+                # Cedar decides. Kept in THIS policy rather than on the role in the
+                # gateway stack for two reasons — every permission the reasoning
+                # plane holds is then readable in one place, and referencing the
+                # Gateway ARN here keeps its cross-stack export in use. Dropping the
+                # last reference to an export the deployed stack still imports is a
+                # rollback CloudFormation cannot complete (V10-7).
+                iam.PolicyStatement(
+                    sid="InvokeTheGatewayAndNothingElse",
+                    actions=["bedrock-agentcore:InvokeGateway"],
+                    resources=[gateway_arn, f"{gateway_arn}/*"],
+                ),
                 # Its own Memory namespace, scoped to this store: a second tenant's
                 # priors — or the checkpointer — is unreachable from here.
                 iam.PolicyStatement(
