@@ -71,7 +71,7 @@ ALLOWED_PREFIXES = (
 
 
 @pytest.fixture(scope="module")
-def runtime_template() -> Template:
+def templates() -> tuple[Template, Template]:
     app = App()
     foundation = FoundationStack(app, "asdp-t-foundation", stage="t", object_lock_days=1)
     participants = ParticipantsStack(
@@ -89,8 +89,22 @@ def runtime_template() -> Template:
         stage="t",
         gateway_arn=gateway.gateway.attr_gateway_arn,
         gateway_url=gateway.gateway.attr_gateway_url,
+        discovery_role=gateway.discovery_role,
     )
-    return Template.from_stack(runtime)
+    return Template.from_stack(runtime), Template.from_stack(gateway)
+
+
+@pytest.fixture(scope="module")
+def runtime_template(templates: tuple[Template, Template]) -> Template:
+    return templates[0]
+
+
+@pytest.fixture(scope="module")
+def gateway_template(templates: tuple[Template, Template]) -> Template:
+    """The discovery ROLE lives here, with the Cedar set that names it. Its
+    Gateway grant therefore lives here too — the runtime stack attaches only the
+    permissions that reference runtime-stack resources (V10-6)."""
+    return templates[1]
 
 
 def _actions(template: Template) -> list[str]:
@@ -141,15 +155,22 @@ def test_the_runtime_is_the_only_bedrock_caller(runtime_template: Template) -> N
     assert all(a.startswith("bedrock:InvokeModel") for a in bedrock)
 
 
-def test_the_runtime_may_reach_the_gateway_and_only_the_gateway(
-    runtime_template: Template,
-) -> None:
-    for policy in runtime_template.find_resources("AWS::IAM::Policy").values():
-        for statement in policy["Properties"]["PolicyDocument"]["Statement"]:
-            if statement.get("Sid") == "InvokeTheGatewayAndNothingElse":
-                assert statement["Action"] == "bedrock-agentcore:InvokeGateway"
-                return
-    pytest.fail("no Gateway grant on the discovery Runtime role")
+def test_the_discovery_role_may_reach_the_gateway(gateway_template: Template) -> None:
+    """The single route to subject data, asserted where the grant lives.
+
+    It moved to the gateway stack with the role (V10-6) — the grant did not disappear,
+    and a test that kept looking in the runtime template would have gone red for the
+    right reason and been "fixed" by deleting it.
+    """
+    grants = [
+        statement
+        for policy in gateway_template.find_resources("AWS::IAM::Policy").values()
+        for statement in policy["Properties"]["PolicyDocument"]["Statement"]
+        if "bedrock-agentcore:InvokeGateway" in str(statement.get("Action", ""))
+    ]
+    assert grants, "the discovery identity cannot reach the Gateway at all"
+    for statement in grants:
+        assert statement["Resource"] != "*", "the Gateway grant must name one gateway"
 
 
 # ─── ADR-025: the zip, and the filename nobody validates ─────────────────────────────
@@ -232,3 +253,79 @@ def test_nothing_in_the_runtime_stack_attaches_to_a_vpc(runtime_template: Templa
         network: dict[str, Any] = resource["Properties"]["NetworkConfiguration"]
         assert network["NetworkMode"] == "PUBLIC"
         assert "NetworkModeConfig" not in network
+
+
+# ─── V10-6: one identity, one role ────────────────────────────────────────────────────
+
+
+def _cedar_principal_patterns(stage: str) -> list[str]:
+    """The role-name suffixes the discovery permits actually match."""
+    text = (REPO / "policies" / "cedar" / "01-discovery-reads-only.cedar").read_text(
+        encoding="utf-8"
+    )
+    return [
+        pattern.replace("{stage}", stage)
+        for pattern in re.findall(r'principal\.id like "([^"]+)"', text)
+    ]
+
+
+def _matches(pattern: str, arn: str) -> bool:
+    """Cedar `like`: `*` is the only wildcard, everything else is literal."""
+    return re.fullmatch(re.escape(pattern).replace(r"\*", ".*"), arn) is not None
+
+
+def test_the_runtime_assumes_the_role_the_cedar_permit_names() -> None:
+    """V10-6, and the reason `make eval` returned a 500 on its first run.
+
+    M7 created a SECOND role, `asdp-{stage}-discovery-runtime`, and the Runtime assumed
+    it. Cedar's `like "*:assumed-role/asdp-dev-discovery"` is an **exact suffix** match —
+    the `*` is only at the front — so `...-discovery-runtime` matched nothing, every
+    Gateway call default-denied, all eight probes errored, and the entrypoint answered
+    500. Two roles for one identity; the fix is one role, never a looser permit.
+
+    Nothing hermetic could see it: the role name lives in CDK, the permit lives in a
+    `.cedar` file, and no test compared them. This one does.
+    """
+    role_name = "asdp-dev-discovery"
+    session_arn = f"arn:aws:sts::000000000000:assumed-role/{role_name}"
+    patterns = _cedar_principal_patterns("dev")
+    assert patterns, "the discovery permit no longer constrains principal.id"
+    assert any(_matches(p, session_arn) for p in patterns), (
+        f"no discovery permit matches {session_arn} — the Runtime would default-deny"
+    )
+    # And the session-qualified form, which is the other legal spelling of the same
+    # identity. Which one AgentCore sends has never been observed deployed (M6's gate
+    # only exercised denials), so both are covered rather than guessed at.
+    assert any(_matches(p, f"{session_arn}/some-session") for p in patterns)
+
+
+def test_a_similarly_named_role_is_still_denied() -> None:
+    """The permit must not be loosened into a prefix while fixing the mismatch.
+
+    `asdp-dev-discovery-runtime` and `asdp-dev-discovery-admin` must NOT match. A
+    pattern that admitted them would make the identity boundary a naming convention,
+    which is exactly the sloppiness that produced V10-6.
+    """
+    patterns = _cedar_principal_patterns("dev")
+    for impostor in ("asdp-dev-discovery-runtime", "asdp-dev-discovery-admin"):
+        arn = f"arn:aws:sts::000000000000:assumed-role/{impostor}"
+        assert not any(_matches(p, arn) for p in patterns), f"{impostor} matched a permit"
+
+
+def test_the_runtime_stack_creates_no_second_identity(runtime_template: Template) -> None:
+    """One identity, one role — asserted as an absence, where the bug lived."""
+    roles = runtime_template.find_resources("AWS::IAM::Role")
+    assert roles == {}, (
+        f"the runtime stack creates its own role(s) {sorted(roles)} — the discovery "
+        "identity is `asdp-{stage}-discovery`, created with the Cedar set that names it"
+    )
+
+
+def test_the_runtime_can_create_its_own_log_group(runtime_template: Template) -> None:
+    """V10-6b. Without `logs:CreateLogGroup` AgentCore creates no log group at all, so
+    a failing Runtime answers 500 and the service's own advice — *"check your
+    CloudWatch logs"* — points at nothing. That is precisely what happened: the 500 was
+    undiagnosable from the AWS side and had to be found by reading the source."""
+    assert "logs:CreateLogGroup" in _actions(runtime_template), (
+        "the Runtime cannot create its log group, so its failures are unreadable"
+    )

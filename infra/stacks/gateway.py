@@ -192,7 +192,20 @@ class GatewayStack(Stack):
             self,
             "DiscoveryRole",
             role_name=f"asdp-{stage}-discovery",
-            assumed_by=iam.ServicePrincipal("bedrock-agentcore.amazonaws.com"),
+            assumed_by=iam.ServicePrincipal(
+                "bedrock-agentcore.amazonaws.com",
+                # Confused-deputy conditions from the AgentCore runtime-permissions
+                # guide. This role is assumed by the discovery Runtime (M7), which
+                # lives in the runtime stack and attaches its own permissions here.
+                conditions={
+                    "StringEquals": {"aws:SourceAccount": self.account},
+                    "ArnLike": {
+                        "aws:SourceArn": self.format_arn(
+                            service="bedrock-agentcore", resource="*", region=self.region
+                        )
+                    },
+                },
+            ),
             description="ASDP discovery identity: read-only at the Gateway (invariant 1)",
         )
         self.discovery_role.add_to_policy(

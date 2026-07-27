@@ -41,4 +41,5 @@ permit(
   ],
   resource == AgentCore::Gateway::"{gateway_arn}"
 )
-when { principal.id like "*:assumed-role/asdp-{stage}-discovery" };
+when { (principal.id like "*:assumed-role/asdp-{stage}-discovery"
+        || principal.id like "*:assumed-role/asdp-{stage}-discovery/*") };

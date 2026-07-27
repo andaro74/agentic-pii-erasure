@@ -3,6 +3,11 @@
   "degraded": [
     "notify-suppression: SES sandbox refused PutSuppressedDestination, so no suppression entry exists and hard_delete will return APPLIED instead of PARTIAL. The RESIDUAL_BY_DESIGN archetype is NOT demonstrated in this environment."
   ],
+  "holds": {
+    "sub_dmi_2b8e4406": [
+      "hold_dmi_litigation"
+    ]
+  },
   "subjects": {
     "sub_cal_1f9a6d05": {
       "analytics-lake": {

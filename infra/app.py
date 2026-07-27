@@ -70,6 +70,9 @@ runtime = RuntimeStack(
     stage=stage,
     gateway_arn=gateway.gateway.attr_gateway_arn,
     gateway_url=gateway.gateway.attr_gateway_url,
+    # The SAME role the Cedar policy set names. One identity, one role: a second
+    # role for the same identity default-denies at the Gateway (V10-6).
+    discovery_role=gateway.discovery_role,
 )
 
 SagaStack(

@@ -73,6 +73,7 @@ class RuntimeStack(Stack):
         stage: str,
         gateway_arn: str,
         gateway_url: str,
+        discovery_role: iam.IRole,
         **kwargs: object,
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)  # type: ignore[arg-type]
@@ -95,89 +96,87 @@ class RuntimeStack(Stack):
         # ── The code zip ─────────────────────────────────────────────────────
         self.asset = s3_assets.Asset(self, "RuntimeCode", path=str(RUNTIME_ASSET))
 
-        self.role = iam.Role(
+        # ── ONE identity, ONE role (V10-6) ──────────────────────────────────
+        # This is `asdp-{stage}-discovery`, created in the gateway stack alongside the
+        # Cedar policy set that names it. M7's first cut created a SECOND role,
+        # `asdp-{stage}-discovery-runtime`, and the Runtime assumed that one — so every
+        # Gateway call default-denied, because Cedar's `like "*:assumed-role/
+        # asdp-dev-discovery"` is an exact suffix match and does not match
+        # `...-discovery-runtime`. Two roles for one identity is the bug; the fix is
+        # one role, not a looser permit.
+        self.role = discovery_role
+
+        # Permissions live in a policy owned by THIS stack, not on the role's default
+        # policy. Adding to a role from another stack would make the gateway stack
+        # import the memory ARN and asset bucket while this stack imports the gateway
+        # ARN — a reference cycle CloudFormation refuses.
+        self.permissions = iam.Policy(
             self,
-            "DiscoveryRuntimeRole",
-            role_name=f"asdp-{stage}-discovery-runtime",
-            assumed_by=iam.ServicePrincipal(
-                "bedrock-agentcore.amazonaws.com",
-                conditions={
-                    "StringEquals": {"aws:SourceAccount": self.account},
-                    "ArnLike": {
-                        "aws:SourceArn": self.format_arn(
-                            service="bedrock-agentcore", resource="*", region=self.region
-                        )
-                    },
-                },
-            ),
-            description="ASDP discovery Runtime. Bedrock + Gateway only, no participant IAM.",
-        )
-
-        # It must read its own deployment package, and nothing else in that bucket.
-        self.asset.grant_read(self.role)
-
-        # The ONLY Bedrock permission in the platform. The saga has none at all
-        # (invariant 12) and the participants have none (asserted in their stack) —
-        # so this single statement is the whole reasoning-plane privilege.
-        self.role.add_to_policy(
-            iam.PolicyStatement(
-                sid="InvokeFoundationModels",
-                actions=["bedrock:InvokeModel", "bedrock:InvokeModelWithResponseStream"],
-                resources=[
-                    self.format_arn(
-                        service="bedrock",
-                        region=self.region,
-                        account="",
-                        resource="foundation-model",
-                        resource_name="*",
-                        arn_format=ArnFormat.SLASH_RESOURCE_NAME,
-                    ),
-                    self.format_arn(
-                        service="bedrock",
-                        resource="inference-profile",
-                        resource_name="*",
-                        arn_format=ArnFormat.SLASH_RESOURCE_NAME,
-                    ),
-                ],
-            )
-        )
-
-        # The single route to subject data: through the Gateway, where Cedar decides.
-        self.role.add_to_policy(
-            iam.PolicyStatement(
-                sid="InvokeTheGatewayAndNothingElse",
-                actions=["bedrock-agentcore:InvokeGateway"],
-                resources=[gateway_arn],
-            )
-        )
-
-        # Its own Memory namespace. Scoped to this memory resource so a second
-        # tenant's store — or the checkpointer — is unreachable from here.
-        self.role.add_to_policy(
-            iam.PolicyStatement(
-                sid="TopologyPriors",
-                actions=[
-                    "bedrock-agentcore:BatchCreateMemoryRecords",
-                    "bedrock-agentcore:RetrieveMemoryRecords",
-                    "bedrock-agentcore:ListMemoryRecords",
-                ],
-                resources=[self.memory.attr_memory_arn],
-            )
-        )
-
-        self.role.add_to_policy(
-            iam.PolicyStatement(
-                sid="Observability",
-                actions=[
-                    "logs:CreateLogStream",
-                    "logs:PutLogEvents",
-                    "logs:DescribeLogStreams",
-                    "cloudwatch:PutMetricData",
-                    "xray:PutTraceSegments",
-                    "xray:PutTelemetryRecords",
-                ],
-                resources=["*"],
-            )
+            "DiscoveryRuntimePermissions",
+            roles=[discovery_role],
+            statements=[
+                # The ONLY Bedrock permission in the platform. The saga has none
+                # (invariant 12), the participants have none. This one statement is
+                # the whole reasoning-plane privilege.
+                iam.PolicyStatement(
+                    sid="InvokeFoundationModels",
+                    actions=[
+                        "bedrock:InvokeModel",
+                        "bedrock:InvokeModelWithResponseStream",
+                    ],
+                    resources=[
+                        self.format_arn(
+                            service="bedrock",
+                            region=self.region,
+                            account="",
+                            resource="foundation-model",
+                            resource_name="*",
+                            arn_format=ArnFormat.SLASH_RESOURCE_NAME,
+                        ),
+                        self.format_arn(
+                            service="bedrock",
+                            resource="inference-profile",
+                            resource_name="*",
+                            arn_format=ArnFormat.SLASH_RESOURCE_NAME,
+                        ),
+                    ],
+                ),
+                # Its own Memory namespace, scoped to this store: a second tenant's
+                # priors — or the checkpointer — is unreachable from here.
+                iam.PolicyStatement(
+                    sid="TopologyPriors",
+                    actions=[
+                        "bedrock-agentcore:BatchCreateMemoryRecords",
+                        "bedrock-agentcore:RetrieveMemoryRecords",
+                        "bedrock-agentcore:ListMemoryRecords",
+                    ],
+                    resources=[self.memory.attr_memory_arn],
+                ),
+                # It reads its own deployment package, and nothing else.
+                iam.PolicyStatement(
+                    sid="ReadOwnDeploymentPackage",
+                    actions=["s3:GetObject", "s3:GetObjectVersion"],
+                    resources=[f"arn:aws:s3:::{self.asset.s3_bucket_name}/*"],
+                ),
+                # CreateLogGroup included deliberately (V10-6b): without it AgentCore
+                # creates no log group at all, so a failing Runtime answers 500 and the
+                # service's own advice — "check your CloudWatch logs" — points at
+                # nothing. An undiagnosable failure is worse than a noisy one.
+                iam.PolicyStatement(
+                    sid="Observability",
+                    actions=[
+                        "logs:CreateLogGroup",
+                        "logs:CreateLogStream",
+                        "logs:PutLogEvents",
+                        "logs:DescribeLogStreams",
+                        "logs:DescribeLogGroups",
+                        "cloudwatch:PutMetricData",
+                        "xray:PutTraceSegments",
+                        "xray:PutTelemetryRecords",
+                    ],
+                    resources=["*"],
+                ),
+            ],
         )
 
         self.runtime = agentcore.CfnRuntime(

@@ -49,7 +49,8 @@ permit(
   resource == AgentCore::Gateway::"{gateway_arn}"
 )
 when {
-  principal.id like "*:assumed-role/asdp-{stage}-saga-executor" &&
+  (principal.id like "*:assumed-role/asdp-{stage}-saga-executor"
+   || principal.id like "*:assumed-role/asdp-{stage}-saga-executor/*") &&
   context.input has manifestDigest &&
   context.input.manifestDigest like "sha256:*"
 };

@@ -1050,6 +1050,43 @@ while establishing the arm64 platform tag — and acted on the tag, which was th
 interesting finding, while the adjacent warning went unwired. Reading the constraint is
 not the control; the control is the line in the recipe and the test that keeps it there.
 
+### 2026-07-27 · V10-6 — two roles for one identity, and a 500 with no logs behind it
+
+| ID | Severity | Finding | Resolution |
+|---|---|---|---|
+| **V10-6** | **High** | **The discovery Runtime assumed a role no Cedar permit names.** M6 created `asdp-{stage}-discovery` *specifically* as the Cedar principal, with a comment reading "the Runtime that assumes it lands at M7". M7 then created a **second** role, `asdp-{stage}-discovery-runtime`, and pointed the Runtime at that. Cedar's `principal.id like "*:assumed-role/asdp-dev-discovery"` is an **exact suffix** match — the `*` is only at the front — so `…-discovery-runtime` matched nothing. Every Gateway call default-denied, all eight probes errored, `reconcile` raised `IncompleteSweepError`, and `make eval` got a 500. | One identity, one role. `RuntimeStack` now *takes* the gateway stack's `discovery_role` and attaches its permissions through an `iam.Policy` owned by the runtime stack — an `add_to_policy` on a role from another stack would have made the gateway import the memory ARN while the runtime imports the gateway ARN, a cycle. The second role is gone. |
+| **V10-6b** | **Medium** | **The Runtime could not create its own log group**, so there were no logs. The role held `logs:CreateLogStream` and `PutLogEvents` but not `CreateLogGroup`; AgentCore therefore created no group at all, and the service's own error — *"Please check your CloudWatch logs for more information"* — pointed at nothing. `describe-log-groups` returned every participant Lambda and no Runtime. The 500 had to be diagnosed by reading source. | `logs:CreateLogGroup` and `DescribeLogGroups` added, and asserted. |
+
+**Nothing hermetic could see V10-6, and that is the finding.** The role name lived in
+CDK; the permit lived in a `.cedar` file; no test compared them. `make check` was green,
+`cdk synth` was green, `make deploy-dev` succeeded — the identity mismatch is invisible
+to all three, because both halves are individually valid. It surfaces only when a permit
+is *evaluated*, which nothing had ever done.
+
+**No Cedar permit had ever been exercised deployed.** M6's gate tested two *denials* —
+an empty tool surface for a stranger, and `hard_delete` without a token — and the saga
+reaches participants directly rather than through the Gateway. So the first time a
+permit needed to match anything was this eval run, seven commits after the policy set
+was declared complete. A deny-by-default control set that has only ever been observed
+denying is half-tested, and the untested half is the one that breaks the system.
+
+That also means the ARN form was unverified. AgentCore may populate `principal.id` with
+the bare assumed-role ARN or the session-qualified `…/session-name` form, and no
+observation exists either way. Both spellings of the same identity are now permitted —
+explicitly **not** by loosening to a prefix, which would readmit `-discovery-runtime`
+and turn the identity boundary back into a naming convention.
+
+**Guarded three ways, each mutation-tested.** The Cedar patterns are rendered and matched
+against the role the Runtime assumes; a similarly-named impostor
+(`asdp-dev-discovery-runtime`, `-admin`) must still be denied; and the runtime stack must
+create **no** `AWS::IAM::Role` at all — the absence asserted where the bug lived. The
+second guard exists because the tempting fix for the first was to widen the permit.
+
+**The corrected general rule:** a control that names a principal must be tested against
+the principal that will actually arrive, and "the deploy succeeded" says nothing about
+whether a permit can match. V10-1 through V10-4 were rules only the service knew. This
+one was a rule *we* wrote, in two files, that disagreed with itself.
+
 1. Read a doc claim as an adversary: *what would make this false, and could the
    named control detect it?*
 2. If the control can't go red, that's a finding — record it here with the fix and
