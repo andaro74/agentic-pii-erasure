@@ -40,6 +40,13 @@ POLICY_DIR = Path(__file__).resolve().parents[3] / "policies" / "cedar"
 #: cannot authorise a prod role that happens to share an account.
 _STAGE_PLACEHOLDER = "{stage}"
 
+#: The one gateway every policy governs. Not a convenience: CreatePolicy REJECTS a
+#: tool-specific action list scoped to `resource is AgentCore::Gateway` — a constrained
+#: action scope must name a specific gateway resource (V10-3). The stack substitutes the
+#: real ARN via CloudFormation; this engine substitutes the ARN it was constructed with,
+#: so the same files serve both.
+_GATEWAY_PLACEHOLDER = "{gateway_arn}"
+
 
 class PolicyLoadError(RuntimeError):
     """The policy set is missing, empty, or does not validate against the schema."""
@@ -50,8 +57,8 @@ def policy_files() -> tuple[Path, ...]:
     return tuple(sorted(POLICY_DIR.glob("*.cedar")))
 
 
-def load_policy_text(stage: str, *, directory: Path | None = None) -> str:
-    """Concatenate the policy set with `{stage}` resolved.
+def load_policy_text(stage: str, *, gateway_arn: str, directory: Path | None = None) -> str:
+    """Concatenate the policy set with `{stage}` and `{gateway_arn}` resolved.
 
     Fails loudly on an empty set. A policy engine deployed with no policies denies
     everything by default, which looks like a working control right up until someone
@@ -61,10 +68,13 @@ def load_policy_text(stage: str, *, directory: Path | None = None) -> str:
     if not files:
         raise PolicyLoadError(f"no .cedar policies found in {directory or POLICY_DIR}")
     rendered = [
-        path.read_text(encoding="utf-8").replace(_STAGE_PLACEHOLDER, stage) for path in files
+        path.read_text(encoding="utf-8")
+        .replace(_STAGE_PLACEHOLDER, stage)
+        .replace(_GATEWAY_PLACEHOLDER, gateway_arn)
+        for path in files
     ]
     text = "\n".join(rendered)
-    if _STAGE_PLACEHOLDER in text:
+    if _STAGE_PLACEHOLDER in text or _GATEWAY_PLACEHOLDER in text:
         raise PolicyLoadError("a placeholder survived rendering")
     return text
 
@@ -91,7 +101,7 @@ class PolicyEngine:
     """Evaluates the deployed policy set in-process."""
 
     def __init__(self, *, stage: str, gateway_arn: str, directory: Path | None = None) -> None:
-        self._policies = load_policy_text(stage, directory=directory)
+        self._policies = load_policy_text(stage, gateway_arn=gateway_arn, directory=directory)
         self._gateway = gateway_arn
         self._schema = cedar_schema_json()
         errors = validate(self._policies)

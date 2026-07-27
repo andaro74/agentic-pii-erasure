@@ -80,7 +80,7 @@ def test_the_policy_set_exists_and_is_not_empty() -> None:
 
 
 def test_every_policy_validates_against_the_generated_schema() -> None:
-    errors = validate(load_policy_text(STAGE))
+    errors = validate(load_policy_text(STAGE, gateway_arn=GATEWAY))
     assert errors == [], f"policy set does not validate: {errors[0] if errors else ''}"
 
 
@@ -96,15 +96,65 @@ def test_each_file_holds_exactly_one_statement(path: Path) -> None:
     assert body.count(";") == 1, f"{path.name} must contain exactly one Cedar statement"
 
 
+@pytest.mark.parametrize("path", policy_files(), ids=lambda p: p.stem)
+def test_every_policy_names_the_specific_gateway(path: Path) -> None:
+    """V10-3's mechanism guard. CreatePolicy rejects a tool-specific action list scoped
+    to `resource is AgentCore::Gateway` — "a constrained action scope was encountered,
+    please constrain the resource to a specific AgentCore::Gateway resource". Verified
+    the expensive way; kept red-able the cheap way."""
+    body = "\n".join(
+        line
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if not line.strip().startswith("//")
+    )
+    assert 'resource == AgentCore::Gateway::"{gateway_arn}"' in body, (
+        f"{path.name} does not pin the gateway"
+    )
+    assert "resource is AgentCore::Gateway" not in body, (
+        f"{path.name} uses the type-only resource form the control plane rejects"
+    )
+
+
+def test_a_permit_for_one_gateway_does_not_authorise_another() -> None:
+    """What the pinning buys: the policy set is an artifact of ONE gateway. A second
+    gateway in the same account — another stage's, another team's — inherits nothing."""
+    from cedarpy import Decision as CedarDecision
+    from cedarpy import is_authorized
+
+    from pii_erasure.policy.schema import cedar_schema_json
+
+    other = GATEWAY.replace("asdp-dev-gateway", "another-teams-gateway")
+    request = {
+        "principal": f'AgentCore::IamEntity::"{DISCOVERY}"',
+        "action": f'AgentCore::Action::"{action_name("profile-store", "discover")}"',
+        "resource": f'AgentCore::Gateway::"{other}"',
+        "context": {"input": dict(READ_INPUT)},
+    }
+    entities = [
+        {
+            "uid": {"type": "AgentCore::IamEntity", "id": DISCOVERY},
+            "attrs": {"id": DISCOVERY},
+            "parents": [],
+        },
+        {"uid": {"type": "AgentCore::Gateway", "id": other}, "attrs": {}, "parents": []},
+    ]
+    result = is_authorized(
+        request, load_policy_text(STAGE, gateway_arn=GATEWAY), entities, cedar_schema_json()
+    )
+    assert result.decision != CedarDecision.Allow
+
+
 def test_rendering_leaves_no_placeholder() -> None:
-    text = load_policy_text("prod")
+    text = load_policy_text("prod", gateway_arn=GATEWAY)
     assert "{stage}" not in text
+    assert "{gateway_arn}" not in text
     assert "asdp-prod-discovery" in text
+    assert f'AgentCore::Gateway::"{GATEWAY}"' in text
 
 
 def test_an_empty_policy_directory_fails_loudly(tmp_path: Path) -> None:
     with pytest.raises(PolicyLoadError, match=r"no \.cedar"):
-        load_policy_text(STAGE, directory=tmp_path)
+        load_policy_text(STAGE, gateway_arn=GATEWAY, directory=tmp_path)
 
 
 def test_an_invented_context_key_would_fail_validation() -> None:
@@ -116,7 +166,8 @@ def test_an_invented_context_key_would_fail_validation() -> None:
     """
     bogus = (
         "permit(principal is AgentCore::IamEntity, action == AgentCore::Action::"
-        f'"{action_name(system_ids()[0], "hard_delete")}", resource is AgentCore::Gateway)'
+        f'"{action_name(system_ids()[0], "hard_delete")}", '
+        f'resource == AgentCore::Gateway::"{GATEWAY}")'
         " when { context.legalHoldCount == 0 };"
     )
     errors = validate(bogus)
@@ -220,7 +271,7 @@ def test_a_neighbouring_stage_cannot_borrow_this_stages_permits() -> None:
 
 def test_the_policy_actions_cover_the_registry_exactly() -> None:
     """Participant #9 must not arrive unprotected — nor must a removed one linger."""
-    text = load_policy_text(STAGE)
+    text = load_policy_text(STAGE, gateway_arn=GATEWAY)
     for system_id in system_ids():
         for tool in TOOL_NAMES:
             action = action_name(system_id, tool)

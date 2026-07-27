@@ -7,6 +7,11 @@
 // the only context that exists is context.input (ADR-024). The enumerations are
 // asserted against the registry in tests/unit/test_policies.py, so participant #9
 // cannot be missed quietly.
+//
+// The resource is one SPECIFIC gateway, whose ARN is substituted at deploy from
+// the stack. Not style: CreatePolicy rejects a constrained action list scoped to
+// `resource is AgentCore::Gateway` (any gateway) with a ValidationException, so a
+// tool-specific policy must name the gateway it governs (V10-3).
 
 // ── 4. No irreversible deletion without an approval token. Forbid wins. ──────
 // Unconditional: it names no principal, so it binds the executor, a future service,
@@ -29,7 +34,7 @@ forbid(
     AgentCore::Action::"upload-bucket___hard_delete",
     AgentCore::Action::"vector-index___hard_delete"
   ],
-  resource is AgentCore::Gateway
+  resource == AgentCore::Gateway::"{gateway_arn}"
 )
 unless {
   context.input has approvalToken &&

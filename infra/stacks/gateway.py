@@ -96,7 +96,6 @@ class GatewayStack(Stack):
             name=agentcore_identifier("asdp", stage, "policy_engine"),
             description="ASDP Cedar policy set for the deletion Gateway",
         )
-        self.policies = self._attach_policies(stage)
 
         self.gateway = agentcore.CfnGateway(
             self,
@@ -121,11 +120,17 @@ class GatewayStack(Stack):
                 )
             ),
         )
-        # The engine and its policies must exist before the Gateway references them,
-        # and the policies validate against the schema the Gateway generates — so the
-        # ordering is a real dependency, not a formality.
-        for policy in self.policies:
-            self.gateway.node.add_dependency(policy)
+        # ── Ordering: gateway → targets → policies, and it cannot be otherwise ──
+        # M6's first cut created the policies before the Gateway, on the assumption
+        # that what the Gateway references must exist first. The service refused it
+        # (V10-3): a tool-specific action list must be scoped to a SPECIFIC gateway —
+        # `resource == AgentCore::Gateway::"<arn>"` — and the ARN only exists once the
+        # Gateway does. The targets must exist too, because FAIL_ON_ANY_FINDINGS
+        # validates each policy against the tool schema the targets declare. So the
+        # policies come last, referencing the ARN, depending on every target. The
+        # window in which the Gateway is live with no policies attached is fail-closed:
+        # an empty Cedar set default-denies (and this stack deploys LOG_ONLY first
+        # regardless, per §9.4).
 
         # ── The discovery identity the policies name ─────────────────────────
         # Created here, with the policy set, because a Cedar principal that names a
@@ -152,6 +157,15 @@ class GatewayStack(Stack):
         for system_id, function in participants.items():
             self.targets[system_id] = self._target(system_id, function)
 
+        self.policies = self._attach_policies(stage)
+        for policy in self.policies:
+            # Referencing the Gateway ARN already orders each policy after the Gateway;
+            # the targets are the part CloudFormation cannot infer. Without them a
+            # policy can be validated against a tool schema that does not mention its
+            # actions yet, and FAIL_ON_ANY_FINDINGS makes that a deploy failure.
+            for target in self.targets.values():
+                policy.node.add_dependency(target)
+
         CfnOutput(self, "PolicyEngineArn", value=self.policy_engine.attr_policy_engine_arn)
         CfnOutput(self, "DiscoveryRoleArn", value=self.discovery_role.role_arn)
         CfnOutput(self, "PolicyMode", value=self.policy_mode.value_as_string)
@@ -174,7 +188,15 @@ class GatewayStack(Stack):
         """
         policies: list[agentcore.CfnPolicy] = []
         for path in policy_files():
-            statement = path.read_text(encoding="utf-8").replace("{stage}", stage)
+            # `attr_gateway_arn` is a CloudFormation token, so the rendered statement
+            # becomes an Fn::Join resolving at deploy — each policy names the one
+            # gateway it governs, which the service requires for tool-specific
+            # policies (V10-3) and which also orders policy-after-gateway for free.
+            statement = (
+                path.read_text(encoding="utf-8")
+                .replace("{stage}", stage)
+                .replace("{gateway_arn}", self.gateway.attr_gateway_arn)
+            )
             construct_id = "Policy" + "".join(
                 part.capitalize() for part in path.stem.split("-") if not part.isdigit()
             )

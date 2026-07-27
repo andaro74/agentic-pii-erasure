@@ -7,6 +7,11 @@
 // the only context that exists is context.input (ADR-024). The enumerations are
 // asserted against the registry in tests/unit/test_policies.py, so participant #9
 // cannot be missed quietly.
+//
+// The resource is one SPECIFIC gateway, whose ARN is substituted at deploy from
+// the stack. Not style: CreatePolicy rejects a constrained action list scoped to
+// `resource is AgentCore::Gateway` (any gateway) with a ValidationException, so a
+// tool-specific policy must name the gateway it governs (V10-3).
 
 // ── 1. The discovery agent can look, and only look. ──────────────────────────
 // Invariant 1's Cedar half, and the one that also drives tool-list filtering:
@@ -34,6 +39,6 @@ permit(
     AgentCore::Action::"vector-index___discover",
     AgentCore::Action::"vector-index___verify"
   ],
-  resource is AgentCore::Gateway
+  resource == AgentCore::Gateway::"{gateway_arn}"
 )
 when { principal.id like "*:assumed-role/asdp-{stage}-discovery" };

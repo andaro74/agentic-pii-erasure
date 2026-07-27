@@ -269,6 +269,18 @@ def test_the_enforcement_mode_is_a_parameter_defaulting_to_log_only(
     assert sorted(mode["AllowedValues"]) == ["ENFORCE", "LOG_ONLY"]
 
 
+def _statement_parts(properties: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
+    """A rendered Cedar statement is an Fn::Join once it embeds the Gateway ARN token:
+    string fragments interleaved with intrinsics. Return (joined text, intrinsics)."""
+    statement = properties["Definition"]["Cedar"]["Statement"]
+    if isinstance(statement, str):
+        return statement, []
+    parts = statement["Fn::Join"][1]
+    text = "".join(part for part in parts if isinstance(part, str))
+    intrinsics = [part for part in parts if isinstance(part, dict)]
+    return text, intrinsics
+
+
 def test_every_cedar_file_deploys_as_its_own_policy(gateway: Template) -> None:
     """One statement per file, one file per CfnPolicy — and every one validated by AWS
     against the schema the Gateway generates (ADR-018's requirement, enforced by the
@@ -282,8 +294,40 @@ def test_every_cedar_file_deploys_as_its_own_policy(gateway: Template) -> None:
         properties = resource["Properties"]
         assert properties["ValidationMode"] == "FAIL_ON_ANY_FINDINGS"
         assert properties["EnforcementMode"] == "ACTIVE"
-        assert properties["Definition"]["Cedar"]["Statement"].strip()
-        assert "{stage}" not in properties["Definition"]["Cedar"]["Statement"]
+        text, _ = _statement_parts(properties)
+        assert text.strip()
+        assert "{stage}" not in text
+
+
+def test_every_policy_is_pinned_to_this_gateway_and_ordered_after_its_targets(
+    gateway: Template,
+) -> None:
+    """V10-3, both halves, in the template.
+
+    Pinning: CreatePolicy rejects a tool-specific action list scoped to `resource is`
+    (any gateway), so every statement must resolve the Gateway's ARN — visible here as
+    a `Fn::GetAtt` on the Gateway inside the statement's Fn::Join, which also gives
+    CloudFormation the policy-after-gateway ordering for free.
+
+    Ordering: the targets are the half CloudFormation cannot infer. FAIL_ON_ANY_FINDINGS
+    validates each policy against the tool schema the targets declare, so a policy
+    created before its targets validates against a manifest that does not mention its
+    actions — a deploy failure at best, a vacuous policy at worst.
+    """
+    gateways = list(gateway.find_resources("AWS::BedrockAgentCore::Gateway"))
+    assert len(gateways) == 1
+    target_ids = set(gateway.find_resources("AWS::BedrockAgentCore::GatewayTarget"))
+    assert target_ids, "no targets to order against"
+    for logical_id, resource in gateway.find_resources("AWS::BedrockAgentCore::Policy").items():
+        text, intrinsics = _statement_parts(resource["Properties"])
+        assert 'resource == AgentCore::Gateway::"' in text, f"{logical_id} is not pinned"
+        assert "{gateway_arn}" not in text, f"{logical_id} left the placeholder unrendered"
+        assert any(
+            intrinsic.get("Fn::GetAtt", [None])[0] == gateways[0] for intrinsic in intrinsics
+        ), f"{logical_id}'s statement does not resolve the Gateway ARN"
+        assert target_ids <= set(resource.get("DependsOn", [])), (
+            f"{logical_id} does not depend on every target"
+        )
 
 
 @pytest.mark.parametrize(

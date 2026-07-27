@@ -927,6 +927,41 @@ narrower and less comfortable — **a synth warning naming a specific resource i
 "a similar thing deployed once" is not.** Every `F3031` in this repo is now either fixed or
 a build failure, so the judgement call cannot recur.
 
+### 2026-07-27 · V10-3 — a tool-specific policy must name its gateway, which inverts the stack
+
+| ID | Severity | Finding | Resolution |
+|---|---|---|---|
+| **V10-3** | **Medium** | **Every Cedar policy was scoped to `resource is AgentCore::Gateway` — any gateway of the type — and CreatePolicy refuses that for tool-specific action lists**: *"a constrained action scope was encountered, please constrain the resource to a specific AgentCore::Gateway resource"*. The AWS docs' worked examples confirm the required form: `resource == AgentCore::Gateway::"<full gateway ARN>"`. `make policy-test` could not catch it because cedarpy validates against the Cedar schema, where the type-only form is perfectly legal — the rule is AgentCore's own, applied at CreatePolicy, one service-side parse deeper than V10-1's name pattern. | The `.cedar` files now carry a `{gateway_arn}` placeholder next to `{stage}`; the stack renders it from `attr_gateway_arn` (an Fn::Join over a GetAtt) and `PolicyEngine` renders it from the ARN it is constructed with — same files, both consumers, no drift to police. Guarded three ways in `test_policies.py` and `test_participants_synth.py`: textual (each file pins the gateway, and the type-only form is absent outside comments), behavioural (a permit rendered for gateway A does not authorise the same call on gateway B), and synth (each Policy's statement resolves the Gateway's ARN and depends on every target). |
+
+**The requirement inverted the stack's ordering, and falsified a comment.** M6 created the
+policies before the Gateway, under an explicit comment: *"the engine and its policies must
+exist before the Gateway references them."* Reasonable, assumed, wrong — the policies must
+reference the *Gateway's ARN*, which exists only after the Gateway does, and
+`FAIL_ON_ANY_FINDINGS` validates each policy against the tool schema the *targets*
+declare. So the true order is gateway → targets → policies: the ARN reference gives
+CloudFormation the first dependency for free, and explicit `DependsOn` supplies the half
+it cannot infer. The window in which the Gateway is live with no policies is fail-closed —
+an empty Cedar set default-denies, and the stack deploys `LOG_ONLY` first regardless.
+
+**What the pinning buys is worth naming: the policy set is an artifact of one gateway.**
+A second gateway in the same account — another stage's, another team's — inherits nothing
+from this policy set, and there is now a test asserting exactly that. The type-only form
+would have made every future gateway in the account silently governed by (or worse,
+permitted by) policies written for this one.
+
+**Mutation-tested, both halves.** Reverting one file to `resource is` fails the textual
+guard, the behavioural guard (the foreign-gateway permit *goes green*, proving the pin
+does real Cedar work), and the synth guard. Removing the target dependencies fails the
+ordering assertion alone.
+
+**Three deploy failures, three different validators, one lesson deepening.** V10-1: synth
+does not check service naming rules. V10-2: CDK warned and the warning was misjudged.
+V10-3: no local layer *could* know — the rule lives in CreatePolicy's parser and appears
+in no schema cedarpy sees. The residual class ("rules only the service knows") cannot be
+closed hermetically, only shrunk: each one found gets a local guard that would have caught
+it, driven from the most authoritative artifact available — the service model where one
+exists, the service's own error text where none does.
+
 1. Read a doc claim as an adversary: *what would make this false, and could the
    named control detect it?*
 2. If the control can't go red, that's a finding — record it here with the fix and
