@@ -96,6 +96,20 @@ def discover(
         region = os.environ.get("AWS_REGION", "us-west-2")
         toolset = read_only_toolset(gateway_url=gateway_url, region=region)
 
+    # What the Gateway is willing to SHOW this identity — measured here because the
+    # Runtime *is* the discovery identity. The alternative was to have the eval harness
+    # assume `asdp-{stage}-discovery`, which fails by design: that role trusts only
+    # `bedrock-agentcore.amazonaws.com`, and adding a human to its trust policy would
+    # weaken the exact boundary the measurement exists to check (V10-8).
+    #
+    # Non-fatal: a failed listing yields an empty surface, and an empty surface FAILS
+    # `tool_surface_minimality` (it compares sets) rather than passing it. Failing open
+    # here would be a vacuous pass, which is the one outcome worse than an error.
+    try:
+        tool_surface = list(toolset.list_tools())
+    except Exception:
+        tool_surface = []
+
     graph = build_discovery_subgraph(toolset)
     state = graph.invoke(
         {
@@ -123,6 +137,7 @@ def discover(
             "agentVersion": AGENT_VERSION,
             "runtimeSessionId": session_id,
         },
+        "toolSurface": tool_surface,
         "toolCalls": [
             {"tool": call.tool, "ok": call.ok, "denied": call.denied}
             for call in getattr(toolset, "calls", [])

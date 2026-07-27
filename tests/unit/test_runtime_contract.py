@@ -33,7 +33,7 @@ from typing import Any
 import pytest
 
 from pii_erasure.contract.registry import system_ids
-from pii_erasure.discovery.tools import GatewayToolset
+from pii_erasure.discovery.tools import GatewayError, GatewayToolset
 from pii_erasure.runtime.entrypoint import SESSION_HEADER, build_server, discover
 
 GATEWAY = "https://gw.example.invalid/mcp"
@@ -42,11 +42,21 @@ GATEWAY = "https://gw.example.invalid/mcp"
 class ScriptedToolset(GatewayToolset):
     """Canned participant responses. No network, no credentials, no AWS."""
 
-    def __init__(self, responses: dict[str, Any] | None = None) -> None:
+    def __init__(
+        self,
+        responses: dict[str, Any] | None = None,
+        surface: tuple[str, ...] = ("profile-store___discover", "profile-store___verify"),
+    ) -> None:
         super().__init__(
             gateway_url=GATEWAY, region="us-west-2", verbs=("discover", "verify"), session=object()
         )
         self._responses = responses or {}
+        self._surface = surface
+
+    def list_tools(self) -> tuple[str, ...]:
+        if self._surface is None:
+            raise GatewayError("tools/list refused")
+        return self._surface
 
     def call(self, system_id: str, verb: str, arguments: dict[str, Any]) -> dict[str, Any]:
         return dict(self._responses.get(system_id, {"found": False, "artifacts": []}))
@@ -204,3 +214,45 @@ def test_discover_records_the_tool_trajectory() -> None:
     result = discover({"subjectRef": "s", "sagaId": "g"}, toolset=ScriptedToolset())
     assert result["toolCalls"] == []  # ScriptedToolset bypasses the recording layer
     assert result["incomplete"] == []
+
+
+# ─── the tool surface is reported BY the identity (V10-8) ────────────────────────────
+
+
+def test_the_runtime_reports_its_own_tool_surface() -> None:
+    """`tool_surface_minimality` is measured here because the Runtime *is* the
+    discovery identity. The harness used to assume `asdp-{stage}-discovery` and call
+    `tools/list` itself — which fails, correctly: that role trusts only
+    `bedrock-agentcore.amazonaws.com`, and adding a human to its trust policy would
+    weaken the boundary the measurement exists to check."""
+    result = discover({"subjectRef": "s", "sagaId": "g"}, toolset=ScriptedToolset())
+    assert result["toolSurface"] == ["profile-store___discover", "profile-store___verify"]
+
+
+def test_a_failed_listing_yields_an_empty_surface_that_fails_the_evaluator() -> None:
+    """The one outcome worse than an error is a vacuous pass.
+
+    An empty surface must not read as "no mutating tools, therefore safe". It does not:
+    `tool_surface_minimality` compares sets, so empty != expected and the verdict is a
+    failure. This test pins both halves — the empty surface, and that it fails.
+    """
+    from evals.evaluators import tool_surface_minimality
+
+    result = discover({"subjectRef": "s", "sagaId": "g"}, toolset=ScriptedToolset(surface=None))
+    assert result["toolSurface"] == []
+    verdict = tool_surface_minimality(
+        observed=result["toolSurface"], expected=["profile-store___discover"]
+    )
+    assert not verdict.passed, "an unmeasurable surface passed as though it were minimal"
+
+
+def test_a_failed_listing_does_not_fail_the_discovery_run() -> None:
+    """The surface is evidence, not control flow. Losing it must not lose the manifest —
+    recall is the safety-critical metric and it does not depend on this."""
+    result = discover(
+        {"subjectRef": "s", "sagaId": "g"},
+        toolset=ScriptedToolset(
+            {"profile-store": {"found": True, "artifacts": [{"kind": "row"}]}}, surface=None
+        ),
+    )
+    assert [p["systemId"] for p in result["participants"]] == ["profile-store"]

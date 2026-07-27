@@ -194,10 +194,12 @@ def run_discovery_suite(*, stage: str, threshold: float) -> int:
     assert_holds_are_measurable(truth)
 
     runtime = _stack_outputs(stage, "runtime")
-    gateway = _stack_outputs(stage, "gateway")
     runtime_arn = runtime["RuntimeArn"]
 
     all_ok = True
+    #: Every invocation from both passes. The surface check reads this rather than the
+    #: loop variable — which would have graded whichever pass happened to run last.
+    every_run: dict[str, dict[str, Any]] = {}
     for label, priors in (("cold", ()), ("warm", ("__warm__",))):
         # Cold and warm are separate *runs*, not separate scorings of one run: the
         # point is that priors change the trajectory, and a single run cannot have
@@ -214,6 +216,7 @@ def run_discovery_suite(*, stage: str, threshold: float) -> int:
             results[subject_ref] = _invoke_runtime(
                 runtime_arn, payload, session_id=_session_id(f"eval{label}", subject_ref)
             )
+            every_run[f"{label}:{subject_ref}"] = results[subject_ref]
 
         verdicts = [
             discovery_recall(expected, results, threshold=threshold),
@@ -227,7 +230,7 @@ def run_discovery_suite(*, stage: str, threshold: float) -> int:
         all_ok &= _report(verdicts, f"── discovery suite · priors {label} ──")
 
     surface = tool_surface_minimality(
-        observed=_discovery_tool_surface(gateway),
+        observed=_discovery_tool_surface(every_run),
         expected=_expected_surface(),
     )
     memory = no_pii_in_memory(_memory_records(stage, runtime))
@@ -243,33 +246,27 @@ def _expected_surface() -> tuple[str, ...]:
     return expected_tool_surface()
 
 
-def _discovery_tool_surface(gateway: Mapping[str, str]) -> tuple[str, ...]:
-    """What the Gateway shows the discovery identity.
+def _discovery_tool_surface(results: Mapping[str, Mapping[str, Any]]) -> tuple[str, ...]:
+    """What the Gateway showed the discovery identity, as reported BY that identity.
 
-    Asks *as* `asdp-discovery` by assuming that role — the whole property under test is
-    per-identity filtering, and measuring it with the caller's own credentials would
-    measure the caller's surface instead. That was M6's deferred half.
+    The harness used to assume `asdp-{stage}-discovery` and call `tools/list` itself.
+    That fails by design and should (V10-8): the role trusts only
+    `bedrock-agentcore.amazonaws.com`, so a human operator cannot assume it — and
+    adding one to its trust policy would weaken the boundary the measurement exists to
+    check. The Runtime *is* that identity, so it reports its own surface.
+
+    Every run must agree. A surface that differs between invocations means per-identity
+    filtering is not deterministic, which is worth failing over rather than averaging.
     """
-    import boto3
-
-    from pii_erasure.discovery.tools import GatewayToolset
-
-    sts = boto3.client("sts")
-    assumed = sts.assume_role(
-        RoleArn=gateway["DiscoveryRoleArn"], RoleSessionName="asdp-eval-tool-surface"
-    )["Credentials"]
-    session = boto3.Session(
-        aws_access_key_id=assumed["AccessKeyId"],
-        aws_secret_access_key=assumed["SecretAccessKey"],
-        aws_session_token=assumed["SessionToken"],
-    )
-    toolset = GatewayToolset(
-        gateway_url=gateway["GatewayUrl"],
-        region=session.region_name or os.environ.get("AWS_REGION", "us-west-2"),
-        verbs=("discover", "verify"),
-        session=session,
-    )
-    return toolset.list_tools()
+    surfaces = {tuple(sorted(r.get("toolSurface", []))) for r in results.values()}
+    if not surfaces:
+        return ()
+    if len(surfaces) > 1:
+        raise GateError(
+            f"the discovery tool surface differed between runs: {sorted(surfaces)} — "
+            "per-identity filtering must be deterministic"
+        )
+    return next(iter(surfaces))
 
 
 def _memory_records(stage: str, runtime: Mapping[str, str]) -> list[str]:
@@ -296,8 +293,16 @@ def run_adversarial_suite(*, stage: str) -> int:
     chose not to comply is not a pass — it is an untested control with a lucky sample.
     """
     corpus = json.loads(CORPUS.read_text(encoding="utf-8"))
-    gateway = _stack_outputs(stage, "gateway")
-    observed = set(_discovery_tool_surface(gateway))
+    runtime_arn = _stack_outputs(stage, "runtime")["RuntimeArn"]
+    # One invocation against a subject that does not exist, purely to read the tool
+    # surface AS the discovery identity. Nothing is mutated and nothing is found; the
+    # surface is the measurement (V10-8).
+    probe = _invoke_runtime(
+        runtime_arn,
+        {"subjectRef": "sub_adversarial_probe", "sagaId": "eval-adversarial"},
+        session_id=_session_id("evaladv", "probe"),
+    )
+    observed = set(_discovery_tool_surface({"probe": probe}))
     expected = set(_expected_surface())
 
     verdicts: list[Verdict] = [

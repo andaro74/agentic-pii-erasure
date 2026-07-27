@@ -342,3 +342,45 @@ def test_seeding_no_holds_is_legitimate(tmp_path: Path, monkeypatch: Any) -> Non
     seeds.write_text(json.dumps({"subjects": [{"subjectRef": "sub_a"}]}), encoding="utf-8")
     monkeypatch.setattr(run, "SEEDS", seeds)
     run.assert_holds_are_measurable({"subjects": {}})
+
+
+# ─── the harness does not assume the identity it measures (V10-8) ────────────────────
+
+
+def test_the_harness_never_assumes_the_discovery_role() -> None:
+    """`make eval` used to call `sts:AssumeRole` on `asdp-{stage}-discovery` to ask what
+    `tools/list` shows that identity. It got AccessDenied, and correctly: the role trusts
+    only `bedrock-agentcore.amazonaws.com`.
+
+    The tempting fix was to add the operator to its trust policy — which would have
+    weakened the exact boundary the measurement exists to check, to measure it. The real
+    fix is that the Runtime reports its own surface, because the Runtime *is* that
+    identity. This guard stops the tempting fix coming back.
+    """
+    source = (REPO / "evals" / "run.py").read_text(encoding="utf-8")
+    assert "assume_role" not in source, (
+        "the eval harness assumes a role again — measure the discovery surface from the "
+        "Runtime, never by borrowing its identity (V10-8)"
+    )
+
+
+def test_the_surface_evaluator_reads_what_the_runtime_reported() -> None:
+    """The observed surface comes from the discovery response, not a second AWS call."""
+    from evals.run import _discovery_tool_surface
+
+    surface = ("profile-store___discover", "profile-store___verify")
+    results = {"cold:sub_a": {"toolSurface": list(surface)}}
+    assert _discovery_tool_surface(results) == surface
+
+
+def test_a_surface_that_differs_between_runs_is_a_gate_error() -> None:
+    """Per-identity filtering must be deterministic. Averaging two different answers
+    would report a surface that neither run actually saw."""
+    from evals.run import _discovery_tool_surface
+
+    results = {
+        "cold:sub_a": {"toolSurface": ["a___discover"]},
+        "warm:sub_a": {"toolSurface": ["a___discover", "a___hard_delete"]},
+    }
+    with pytest.raises(GateError, match="differed between runs"):
+        _discovery_tool_surface(results)

@@ -1114,6 +1114,38 @@ dependency graph has a deployed instance with opinions. The lesson is not "move 
 things" — it is that a cross-stack move needs the *export* consequences thought through
 before the deploy, in the same way V10-3 needed the creation order thought through.
 
+### 2026-07-27 · V10-8 — the harness tried to borrow the identity it was measuring
+
+| ID | Severity | Finding | Resolution |
+|---|---|---|---|
+| **V10-8** | **Medium** | **`make eval` called `sts:AssumeRole` on `asdp-{stage}-discovery` and got AccessDenied** — correctly. That role trusts only `bedrock-agentcore.amazonaws.com`, so no human can assume it. The harness needed to know what `tools/list` returns *for that identity* and reached for the only mechanism that seemed available: become it. | The Runtime reports its own surface. `discover()` calls `tools/list` and returns `toolSurface`; `tool_surface_minimality` reads that instead of making a second AWS call. The Runtime **is** the discovery identity, so this measures the real thing in the real execution context. |
+
+**The tempting fix was to add the operator to the role's trust policy**, and it is worth
+naming why that is wrong rather than merely inconvenient: it would weaken the exact
+boundary the measurement exists to check, *in order to* check it. The reading would then
+be of a role a human can assume — which is not the role the Runtime uses, so the
+measurement would be of something that no longer matches production. `no assume_role in
+evals/run.py` is now a test, because that fix will look reasonable again to someone in a
+hurry.
+
+**I had already written this down and then contradicted it.** M6's deferral note says the
+discovery-surface assertion "needs a caller that can BE `asdp-discovery`, and that role
+trusts only `bedrock-agentcore.amazonaws.com`". Seven commits later I wrote a harness
+that assumes the role. Recording the constraint is not the same as designing around it —
+the same shape as V10-5, where the `__pycache__` warning was read and not wired.
+
+**The vacuous-pass risk this created is pinned.** A failed `tools/list` yields an empty
+surface, and an empty surface must not read as "no mutating tools, therefore safe". It
+does not: `tool_surface_minimality` compares sets, so empty ≠ expected and the verdict is
+a *failure*. Both halves are asserted, because "the measurement broke" and "the property
+holds" are the two things a control must never confuse.
+
+**The surface must also be identical across every run.** The discovery suite invokes the
+Runtime twice per subject (cold and warm) and the check now reads *all* of them rather
+than whichever loop variable survived — a surface that differs between runs means
+per-identity filtering is not deterministic, which is a `GateError` rather than something
+to average.
+
 1. Read a doc claim as an adversary: *what would make this false, and could the
    named control detect it?*
 2. If the control can't go red, that's a finding — record it here with the fix and
