@@ -74,6 +74,7 @@ class RuntimeStack(Stack):
         gateway_arn: str,
         gateway_url: str,
         discovery_role: iam.IRole,
+        model_id: str = "",
         **kwargs: object,
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)  # type: ignore[arg-type]
@@ -233,6 +234,11 @@ class RuntimeStack(Stack):
                 "ASDP_GATEWAY_URL": gateway_url,
                 "ASDP_MEMORY_ID": self.memory.attr_memory_id,
                 "ASDP_STAGE": stage,
+                # Empty is a SUPPORTED configuration: discovery runs deterministically
+                # and recall is unchanged. `.env.example` warns that a wrong id
+                # "deploys cleanly and then fails at discovery time" — it now degrades
+                # instead, and the response says which model was used, or none.
+                "PII_ERASURE_MODEL_ID": model_id,
             },
         )
 

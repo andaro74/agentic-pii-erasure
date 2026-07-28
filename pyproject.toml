@@ -102,7 +102,17 @@ plugins = ["pydantic.mypy"]
 # how boto3's untyped surface is already treated — the framework edge is one
 # import deep behind the invariant-0 allowlist anyway.
 [[tool.mypy.overrides]]
-module = ["numpy.*", "langgraph.*", "langgraph_checkpoint_aws.*", "langchain_core.*"]
+module = [
+  "numpy.*",
+  "langgraph.*",
+  "langgraph_checkpoint_aws.*",
+  "langchain_core.*",
+  # Added at M7: `discovery/advisor.py` imports ChatBedrockConverse, and following
+  # langchain_aws walks mypy into numpy's stubs, which use PEP 695 `type` statements
+  # that are a syntax error under python_version = 3.10. Same mechanism M5 used when
+  # numpy first arrived transitively — skip the walk, keep the strictness on OUR code.
+  "langchain_aws.*",
+]
 follow_imports = "skip"
 ignore_missing_imports = true
 

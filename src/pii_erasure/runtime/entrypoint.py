@@ -37,6 +37,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
+from pii_erasure.discovery.advisor import advisor_from_environment
 from pii_erasure.discovery.subgraph import AGENT_VERSION, build_discovery_subgraph
 from pii_erasure.discovery.tools import read_only_toolset
 from pii_erasure.observability.redact import scrub
@@ -77,6 +78,7 @@ def discover(
     payload: dict[str, Any],
     *,
     toolset: Any = None,
+    advisor: Any = None,
     session_id: str | None = None,
 ) -> dict[str, Any]:
     """Run one discovery pass. The pure core, so tests need no HTTP server at all.
@@ -110,7 +112,12 @@ def discover(
     except Exception:
         tool_surface = []
 
-    graph = build_discovery_subgraph(toolset)
+    # `None` when PII_ERASURE_MODEL_ID is unset — a supported configuration, not a
+    # degraded one. Recall does not depend on it.
+    if advisor is None:
+        advisor = advisor_from_environment()
+
+    graph = build_discovery_subgraph(toolset, advisor=advisor)
     state = graph.invoke(
         {
             "subject_ref": subject_ref,
@@ -135,9 +142,16 @@ def discover(
             # `provenance`, which canonicalisation excludes. Named here so the next
             # reader does not have to rediscover why they are safe.
             "agentVersion": AGENT_VERSION,
+            # IS digested (invariant 4): a manifest approved under one model cannot be
+            # silently executed as though a different one had proposed it.
+            "modelId": advisor.model_id if advisor is not None else None,
             "runtimeSessionId": session_id,
         },
         "toolSurface": tool_surface,
+        # A model that could not be reached says so, rather than looking like a model
+        # that simply had no suggestions (invariant 7's honesty, one plane up).
+        "degraded": list(getattr(advisor, "degraded", []) or []),
+        "scopeHints": list(state.get("scope_hints") or ()),
         "toolCalls": [
             {"tool": call.tool, "ok": call.ok, "denied": call.denied}
             for call in getattr(toolset, "calls", [])

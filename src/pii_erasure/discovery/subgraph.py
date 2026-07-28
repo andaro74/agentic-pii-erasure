@@ -36,6 +36,7 @@ from typing import Annotated, Any, TypedDict
 from langgraph.graph import END, START, StateGraph
 
 from pii_erasure.contract.tools import READ_ONLY_TOOLS
+from pii_erasure.discovery.advisor import Advisor, merge_hints
 from pii_erasure.discovery.agents.cartographer import candidate_systems
 from pii_erasure.discovery.agents.counsel import evaluate_holds, held_systems
 from pii_erasure.discovery.agents.editor import excluded_systems, reconcile
@@ -99,10 +100,15 @@ def assert_read_only(toolset: GatewayToolset) -> tuple[str, ...]:
 def build_discovery_subgraph(
     toolset: GatewayToolset,
     *,
-    model: Any = None,
+    advisor: Advisor | None = None,
     checkpointer: Any = None,
 ) -> Any:
     """Compile the discovery subgraph.
+
+    `advisor` is the model, and it is optional. `None` runs the graph deterministically
+    with identical recall — the sweep is exhaustive either way — which is why
+    `make check` needs no model and why a Bedrock outage degrades depth rather than
+    completeness.
 
     Raises `MutatingToolRefusedError` before any graph exists if `toolset` carries a
     mutating verb. There is no flag, no debug path, and no test hook that bypasses it
@@ -114,15 +120,32 @@ def build_discovery_subgraph(
         return {"candidates": candidate_systems(state.get("priors", ()))}
 
     def prospector(state: DiscoveryState) -> dict[str, Any]:
+        candidates = state.get("candidates") or candidate_systems()
+        hints = state.get("scope_hints", ())
+        if advisor is not None:
+            # The model's ONE effect on the sweep, and it can only widen it: a hint
+            # tells a participant to look under an additional key. It cannot remove a
+            # candidate — `candidates` is already fixed above and is not passed back
+            # through the advisor — so a hostile or hallucinated hint costs precision
+            # and never recall (ADR-008's asymmetry).
+            hints = merge_hints(
+                hints,
+                advisor.scope_hints(
+                    subject_ref=state["subject_ref"],
+                    systems=candidates,
+                    priors=state.get("priors", ()),
+                ),
+            )
         report = sweep(
             toolset,
             subject_ref=state["subject_ref"],
             saga_id=state["saga_id"],
-            candidates=state.get("candidates") or candidate_systems(),
-            scope_hints=state.get("scope_hints", ()),
+            candidates=candidates,
+            scope_hints=hints,
         )
         return {
             "probes": report.results,
+            "scope_hints": tuple(hints),
             "incomplete": tuple(probe.system_id for probe in report.errors),
         }
 
@@ -169,6 +192,7 @@ def build_discovery_subgraph(
     # the compiled object is what a reviewer will try first; make it findable.
     compiled.discovery_verbs = verbs
     compiled.agent_version = AGENT_VERSION
+    compiled.model_id = advisor.model_id if advisor is not None else None
     return compiled
 
 

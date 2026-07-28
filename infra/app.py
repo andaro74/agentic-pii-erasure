@@ -73,6 +73,9 @@ runtime = RuntimeStack(
     # The SAME role the Cedar policy set names. One identity, one role: a second
     # role for the same identity default-denies at the Gateway (V10-6).
     discovery_role=gateway.discovery_role,
+    # Empty unless set. The reasoning plane runs deterministically without it, so an
+    # unset model is a quieter agent rather than a broken deploy.
+    model_id=os.environ.get("PII_ERASURE_MODEL_ID", ""),
 )
 
 SagaStack(

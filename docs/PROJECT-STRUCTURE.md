@@ -98,6 +98,8 @@ discovery/
 │   ├── lineage.py         follow derived-store dependencies (Glue catalog, discover responses)
 │   ├── counsel.py         legal holds and Art. 17(3) exemptions — holds veto
 │   └── editor.py          reconcile findings into one candidate manifest
+├── advisor.py        the ONE model. Emits scope hints only — additive, key-shaped,
+│                     bounded, and degrading to silence on any failure
 ├── memory.py         AgentCore Memory priors — topology only, pre-write scrubber. ADR-019.
 └── tools.py          MCP client over the AgentCore Gateway endpoint
 
