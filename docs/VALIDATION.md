@@ -1244,6 +1244,16 @@ Every clause is correct. The conclusion drawn was "pick a timeout that fails cle
 
 V11-4c deserves one more line. It is the fourth "a gate that cannot gate" in this repo's history ([VALIDATION baseline #2](#baseline), V10-8's empty-surface risk, the tautological route test in `aea9668`, now this) — but the first that would have failed *closed* rather than open. Failing closed is the better direction, and it is still a defect: an operator sent to hunt for a missing ledger entry that was never missing loses the same afternoon.
 
+### 2026-07-28 · V11-5 — one group worked, two did not
+
+| ID | Severity | Finding | Resolution |
+|---|---|---|---|
+| **V11-5** | **High** | **`_groups` split the `cognito:groups` claim on commas only.** API Gateway's JWT authorizer flattens array claims Java-style — `["a","b"]` arrives as the literal `[a b]`, brackets and a **space**. Stripping brackets and splitting on `,` yields one element, `"asdp-approvers asdp-legal"`, which matches nothing. An operator added to **both** required groups was refused for having **neither**. A single group worked by accident, so the bug only appeared once the T3 instruction ("add `asdp-legal` too") was followed. | Split on commas *and* whitespace, covering all three real encodings: the authorizer's bracketed string, a comma-separated string, and the real list `initiate_auth` returns. Eight parameterised cases; restoring the old parser fails them. |
+
+**The refusal could not be diagnosed from its own message.** It said *"approval requires membership of 'asdp-approvers'"* — naming the requirement and never the observation. That reads as "you are not in the group", which sends an operator to the Cognito console to check a membership that was already correct. The 403 now reports the groups the token actually carried, so a mis-parse and a genuine gap look different.
+
+**This is the failure mode of a claim shape assumed rather than read.** ROADMAP rule 3 says to verify API shapes against the service's documentation rather than memory, and it has been applied faithfully to AgentCore all through M6–M7 — where the APIs were new and obviously uncertain. It was not applied here, to a claim encoding that felt too ordinary to check. The four V10 findings were all AgentCore; the boring integration is where this one hid.
+
 1. Read a doc claim as an adversary: *what would make this false, and could the
    named control detect it?*
 2. If the control can't go red, that's a finding — record it here with the fix and

@@ -404,3 +404,69 @@ def test_reads_still_wait(monkeypatch: Any) -> None:
     monkeypatch.setattr(api, "_lambda", lambda: client)
     api.lambda_handler(_event("GET /threads"), None)
     assert [call["InvocationType"] for call in client.invocations] == ["RequestResponse"]
+
+
+# ─── 7. the claim arrives in three shapes (V11-5) ─────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("claim", "expected"),
+    [
+        # API Gateway's JWT authorizer flattens arrays Java-style: brackets, SPACE
+        # separated. This is the shape that actually reaches production, and the one the
+        # first implementation could not parse.
+        ("[asdp-approvers asdp-legal]", {"asdp-approvers", "asdp-legal"}),
+        ("[asdp-approvers]", {"asdp-approvers"}),
+        # A direct initiate_auth response gives a real list.
+        (["asdp-approvers", "asdp-legal"], {"asdp-approvers", "asdp-legal"}),
+        # Some setups comma-separate.
+        ("asdp-approvers,asdp-legal", {"asdp-approvers", "asdp-legal"}),
+        ("[asdp-approvers, asdp-legal]", {"asdp-approvers", "asdp-legal"}),
+        # Nothing at all must be no groups, never a group named "".
+        ("", set()),
+        ("[]", set()),
+        (None, set()),
+    ],
+    ids=[
+        "bracket-space",
+        "bracket-single",
+        "list",
+        "comma",
+        "bracket-comma",
+        "empty",
+        "empty-brackets",
+        "absent",
+    ],
+)
+def test_every_encoding_of_the_groups_claim_parses(claim: Any, expected: set[str]) -> None:
+    """One group worked by accident; two did not. An operator added to BOTH required
+    groups was refused for having neither, which is the least debuggable possible
+    outcome — the message named what was required and never what was seen."""
+    assert api._groups({"cognito:groups": claim}) == expected
+
+
+def test_two_groups_from_the_authorizer_can_approve(monkeypatch: Any) -> None:
+    """End to end through the handler, in the exact shape API Gateway sends."""
+    saga = FakeSaga(PAUSED)
+    event = _event(
+        "POST /threads/{sagaId}/approve",
+        body={"decision": "approve", "manifestDigest": "sha256:aaa"},
+    )
+    event["requestContext"]["authorizer"]["jwt"]["claims"]["cognito:groups"] = (
+        "[asdp-approvers asdp-legal]"
+    )
+    assert _run(event, saga, monkeypatch)["statusCode"] == 200
+
+
+def test_the_refusal_names_what_it_saw(monkeypatch: Any) -> None:
+    """A 403 that lists only the requirement cannot distinguish "you are not in the
+    group" from "this API mis-parsed your groups" — and those two send you to very
+    different places."""
+    saga = FakeSaga(PAUSED)
+    event = _event(
+        "POST /threads/{sagaId}/approve",
+        body={"decision": "approve", "manifestDigest": "sha256:aaa"},
+        groups=["asdp-readers"],
+    )
+    error = _run(event, saga, monkeypatch)["parsed"]["error"]
+    assert "asdp-readers" in error, "the refusal must report the groups it actually saw"

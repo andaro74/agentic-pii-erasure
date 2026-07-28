@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import Any
 
 import boto3
@@ -110,10 +111,23 @@ def _claims(event: dict[str, Any]) -> dict[str, Any]:
 
 
 def _groups(claims: dict[str, Any]) -> set[str]:
+    """The caller's Cognito groups, from whichever shape the authorizer produced.
+
+    **API Gateway's JWT authorizer flattens array claims to a string**, and it does so
+    Java-style: `["a", "b"]` arrives as the literal `[a b]` — brackets, **space**
+    separated. A direct `initiate_auth` response instead gives a real list, and some
+    setups produce a comma-separated string.
+
+    The first version split on commas only. One group worked by accident (`[asdp-approvers]`
+    strips to a single token); **two groups produced one nonsense element**
+    `"asdp-approvers asdp-legal"` that matched nothing, so an operator in both required
+    groups was refused for having neither (V11-5). Splitting on both separators is not
+    defensive coding for its own sake — it is three real encodings of one claim.
+    """
     raw = claims.get("cognito:groups") or []
     if isinstance(raw, str):
-        raw = [part for part in raw.replace("[", "").replace("]", "").split(",") if part]
-    return {str(item).strip() for item in raw}
+        raw = re.split(r"[,\s]+", raw.strip().strip("[]"))
+    return {str(item).strip() for item in raw if str(item).strip()}
 
 
 def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
@@ -239,8 +253,17 @@ def _approve(saga_id: str, body: dict[str, Any], claims: dict[str, Any]) -> dict
     decision = str(body.get("decision", ""))
     if decision not in {"approve", "deny"}:
         raise ApiError(400, "decision must be 'approve' or 'deny'")
-    if APPROVER_GROUP not in _groups(claims):
-        raise ApiError(403, f"approval requires membership of {APPROVER_GROUP!r}")
+    held = _groups(claims)
+    if APPROVER_GROUP not in held:
+        # Naming what was seen turns "you are not in the group" into a diagnosis. The
+        # first version said only what was required, so a claim this API had *mis-parsed*
+        # was indistinguishable from a group the operator had genuinely not been added
+        # to — and the wrong one of those two sends you to the Cognito console (V11-5).
+        raise ApiError(
+            403,
+            f"approval requires membership of {APPROVER_GROUP!r}; this token carries "
+            f"{sorted(held) or 'no groups'}",
+        )
 
     state = _invoke_saga({"action": "describe", "thread_id": saga_id})
     if state.get("gate") != "approval":
@@ -262,7 +285,7 @@ def _approve(saga_id: str, body: dict[str, Any], claims: dict[str, Any]) -> dict
             )
         manifest_body = state.get("manifest") or {}
         tier = required_tier(Manifest.model_validate(manifest_body)) if manifest_body else "T2"
-        if tier == "T3" and LEGAL_GROUP not in _groups(claims):
+        if tier == "T3" and LEGAL_GROUP not in held:
             raise ApiError(
                 403,
                 "this plan is tier T3 — holds, crypto-shred, or disclosed residual risk — "
