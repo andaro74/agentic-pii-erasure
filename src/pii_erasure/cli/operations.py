@@ -37,6 +37,10 @@ from pii_erasure.manifest.models import Manifest
 POLL_TIMEOUT_SECONDS = 900
 POLL_INTERVAL_SECONDS = 10
 
+#: How long a thread may have no checkpoint at all before the wait gives up. An async
+#: intake takes a second or two to land; two minutes of nothing means it never did.
+NO_CHECKPOINT_GRACE_SECONDS = 120
+
 
 #: The operator pool synthesises as `UsernameAttributes: ["email"]`, so a username must
 #: **parse** as an address — Cognito validates the shape and never the mailbox. With
@@ -295,6 +299,14 @@ def verify_ledger(saga_id: str | None = None) -> tuple[int, list[LedgerEntry]]:
 # ─── the walkthrough ──────────────────────────────────────────────────────────────────
 
 
+#: Statuses from which a saga will never reach a later gate on its own. Waiting on one is
+#: waiting on a corpse, and the fifteen minutes spent doing so is fifteen minutes during
+#: which the operator believes work is in progress. `state.py` owns these names; they are
+#: repeated rather than imported because `cli/` must not depend on the saga package's
+#: framework-bearing modules.
+TERMINAL_STATUSES = frozenset({"completed", "compensated", "blocked", "stuck", "aborted"})
+
+
 def wait_for(
     thread_id: str, *, gate: str | None = None, status: str | None = None
 ) -> dict[str, Any]:
@@ -303,15 +315,36 @@ def wait_for(
     Polling the *checkpoint* rather than holding an invocation is the point: between
     calls, nothing of ours is running. That is the property ADR-016 is built on, and the
     walkthrough demonstrates it by being able to stop and restart at any moment.
+
+    A saga that halts somewhere else — `stuck`, `aborted`, `blocked` — ends the wait
+    immediately and says so. The alternative is polling a finished saga until the timeout
+    and then reporting "did not reach the gate", which is true, useless, and fifteen
+    minutes late.
     """
-    deadline = time.time() + POLL_TIMEOUT_SECONDS
+    started = time.time()
+    deadline = started + POLL_TIMEOUT_SECONDS
     last: dict[str, Any] = {}
     while time.time() < deadline:
         last = describe_thread(thread_id)
+        current = str(last.get("status") or "")
         if gate and last.get("gate") == gate:
             return last
-        if status and last.get("status") == status:
+        if status and current == status:
             return last
+        if current in TERMINAL_STATUSES and current != status:
+            raise OperationError(
+                f"{thread_id} halted at status {current!r} while waiting for "
+                f"{gate or status!r}. Errors: {last.get('errors') or 'none recorded'}"
+            )
+        # `describe` returns "unknown" for a thread with no checkpoint. Right after an
+        # async intake that just means the executor has not started yet; if it persists,
+        # the start invocation never landed — and a silent async failure looks exactly
+        # like a slow one, so it must not be waited out in silence (V11-3).
+        if current == "unknown" and time.time() > started + NO_CHECKPOINT_GRACE_SECONDS:
+            raise OperationError(
+                f"{thread_id} has no checkpoint after {NO_CHECKPOINT_GRACE_SECONDS}s — "
+                f"the start invocation did not land. Check the saga-executor log group."
+            )
         time.sleep(POLL_INTERVAL_SECONDS)
     raise OperationError(
         f"{thread_id} did not reach {gate or status!r} within {POLL_TIMEOUT_SECONDS}s "

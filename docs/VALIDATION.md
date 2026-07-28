@@ -1215,6 +1215,22 @@ That is the same shape as [V11-1](#2026-07-28--v11-1--the-only-path-that-needed-
 
 The Makefile's own `LOAD_ENV` comment block already describes this failure — *"make does not read `.env`, so every variable in it used to be inert"* — which makes this a finding the repo had written down and then re-earned on the targets added last. Recording a constraint is not the same as extending it to new code, which is [V10-5](#2026-07-27--v10-5--the-cache-strip-that-named-two-of-three-assets)'s lesson and V10-8's.
 
+### 2026-07-28 · V11-3 — a saga behind an HTTP request, and a comment that said so
+
+| ID | Severity | Finding | Resolution |
+|---|---|---|---|
+| **V11-3** | **High** | **`POST /requests` invoked the saga executor synchronously and timed out.** `start` drives the graph to its first interrupt — discovery, planning, and every phase-2 soft delete — which is minutes of work. The API Lambda's 29-second timeout fired, API Gateway returned **503 Service Unavailable**, and `make walkthrough` failed on its first step *for a saga that was running perfectly well*. Found on the deployed gate: `Duration: 29000.00 ms … Status: timeout`. | Intake is asynchronous: `InvocationType="Event"`, HTTP **202**, and the id to poll. Reads and the approval resume stay synchronous — both are bounded, and the resume returns at the grace interrupt because the hard deletes happen when the *scheduler* fires. `test_intake_does_not_wait_for_the_saga` asserts the InvocationType, not just the status code. |
+
+**The comment describing the bug was in the code that had it.** `infra/stacks/api.py` set the Lambda timeout to 29 seconds and explained why:
+
+> *"The saga itself may take up to 15 minutes, and this waits on it — API Gateway's own 30s integration ceiling is the real limit, so this timeout exists to fail before the gateway does rather than after."*
+
+Every clause is correct. The conclusion drawn was "pick a timeout that fails cleanly" when the available conclusion was "**this call cannot be synchronous**". Writing the constraint down was mistaken for handling it — the same move as [V10-5](#2026-07-27--v10-5--the-cache-strip-that-named-two-of-three-assets) (the `__pycache__` warning read and not wired) and [V10-8](#2026-07-27--v10-8--the-harness-tried-to-borrow-the-identity-it-was-measuring) (the role-trust note written, then contradicted). Three occurrences now, all with the same shape: **the reasoning was recorded in prose and not carried into the design.**
+
+**Why no hermetic test caught it.** Every API test mocked `_invoke_saga` wholesale, so nothing observed *how* the saga was called — only what the handler did with the answer. The mock made a synchronous call and an asynchronous one indistinguishable. The new tests fake the boto3 client one layer lower and assert the `InvocationType`, which is the actual decision.
+
+**A second defect fixed alongside it.** `wait_for` polled until its 15-minute timeout regardless of what the saga was doing, so a run that halted at `stuck` or `aborted` reported "did not reach the approval gate" fifteen minutes later — true, useless, and late. It now ends on any terminal status and prints the recorded errors, and gives up after two minutes if no checkpoint appears at all, because a start invocation that never landed looks exactly like a slow one.
+
 1. Read a doc claim as an adversary: *what would make this false, and could the
    named control detect it?*
 2. If the control can't go red, that's a finding — record it here with the fix and

@@ -232,3 +232,39 @@ def test_the_instructions_use_the_reserved_address_throughout(
     message = str(raised.value)
     assert message.count(operations.EXAMPLE_OPERATOR) == 4, message
     assert "example.com" not in message
+
+
+# ─── waiting on a saga that already halted ────────────────────────────────────────────
+
+
+def test_a_halted_saga_ends_the_wait_immediately(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Polling a corpse for fifteen minutes is fifteen minutes in which the operator
+    believes work is in progress, followed by "did not reach the gate" — true, useless,
+    and late."""
+    monkeypatch.setattr(
+        operations,
+        "describe_thread",
+        lambda thread_id: {"status": "stuck", "gate": None, "errors": [{"where": "phase3"}]},
+    )
+    with pytest.raises(OperationError) as raised:
+        operations.wait_for("saga_1", gate="approval")
+    assert "stuck" in str(raised.value)
+    assert "phase3" in str(raised.value), "the operator needs the error, not just the status"
+
+
+def test_the_target_status_is_not_treated_as_a_halt(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`completed` is terminal AND the thing the walkthrough waits for — a naive terminal
+    check would turn every successful run into a failure."""
+    monkeypatch.setattr(
+        operations, "describe_thread", lambda thread_id: {"status": "completed", "gate": None}
+    )
+    assert operations.wait_for("saga_1", status="completed")["status"] == "completed"
+
+
+def test_reaching_the_gate_wins(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        operations,
+        "describe_thread",
+        lambda thread_id: {"status": "paused", "gate": "approval"},
+    )
+    assert operations.wait_for("saga_1", gate="approval")["gate"] == "approval"

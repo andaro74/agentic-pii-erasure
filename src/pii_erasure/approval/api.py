@@ -61,12 +61,31 @@ def _lambda() -> Any:
     return boto3.client("lambda")
 
 
-def _invoke_saga(payload: dict[str, Any]) -> dict[str, Any]:
+def _invoke_saga(payload: dict[str, Any], *, wait: bool = True) -> dict[str, Any]:
+    """Call the executor. `wait=False` fires and forgets.
+
+    **Which actions may be waited on is a property of the saga, not a preference.** The
+    executor drives the graph to its next interrupt, and for `start` that means discovery,
+    planning, and every phase-2 soft delete — minutes of work. An HTTP request cannot hold
+    that: API Gateway's integration ceiling is 30 seconds, so a synchronous intake times
+    out at 29s and the caller sees a 503 with no saga id, for a saga that is in fact
+    running perfectly well (V11-3).
+
+    Reads (`describe`, `threads`) and the approval resume are bounded and stay
+    synchronous. The approval resume mints a token, schedules the grace wake, and returns
+    at the next interrupt; the hard deletes happen when the *scheduler* fires, not here.
+    """
     response = _lambda().invoke(
         FunctionName=os.environ["SAGA_EXECUTOR_FUNCTION"],
-        InvocationType="RequestResponse",
+        InvocationType="RequestResponse" if wait else "Event",
         Payload=json.dumps(payload).encode("utf-8"),
     )
+    if not wait:
+        # 202 from Lambda means "queued", and that is all there is to report. Failures
+        # after this point surface in the saga's own status, which is what the operator
+        # polls — there is no synchronous answer to wait for and pretending otherwise is
+        # what caused V11-3.
+        return {"status": "accepted"}
     body = json.loads(response["Payload"].read() or b"{}")
     if response.get("FunctionError"):
         # The executor's stack trace can name state; the operator gets the fact, and
@@ -105,7 +124,9 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         params = event.get("pathParameters") or {}
 
         if route == "POST /requests":
-            return _ok(_intake(body, claims))
+            # 202: the work is queued, not done. A 200 here would tell an operator the
+            # erasure had completed when discovery has not even started.
+            return _ok(_intake(body, claims), status=202)
         if route == "GET /threads":
             return _ok(_invoke_saga({"action": "threads"}))
         if route == "GET /threads/{sagaId}":
@@ -129,13 +150,20 @@ def _body(event: dict[str, Any]) -> dict[str, Any]:
 
 
 def _intake(body: dict[str, Any], claims: dict[str, Any]) -> dict[str, Any]:
-    """Start a saga for one subject. T0 — no gate; discovery is read-only."""
+    """Accept an erasure request. T0 — no gate; discovery is read-only.
+
+    **Accepted, not completed.** The saga is started asynchronously and this returns 202
+    with the id to poll. That is not an optimisation: discovery plus phase 2 takes minutes
+    and API Gateway allows 30 seconds, so a synchronous intake reports failure for work
+    that succeeded (V11-3). It also matches how the rest of the system already behaves —
+    the saga's progress is read from the checkpoint, never from a held connection.
+    """
     required = ("sagaId", "subjectRef", "requestId", "tenantId")
     missing = [field for field in required if not body.get(field)]
     if missing:
         raise ApiError(400, f"missing {missing}")
     _log.info("intake", thread_id=body["sagaId"], requested_by=claims["sub"])
-    return _invoke_saga(
+    _invoke_saga(
         {
             "action": "start",
             "saga": {
@@ -145,8 +173,14 @@ def _intake(body: dict[str, Any], claims: dict[str, Any]) -> dict[str, Any]:
                 "tenant_id": body["tenantId"],
                 "manifest": body.get("manifest"),
             },
-        }
+        },
+        wait=False,
     )
+    return {
+        "sagaId": body["sagaId"],
+        "status": "accepted",
+        "poll": f"/threads/{body['sagaId']}",
+    }
 
 
 def _review(saga_id: str) -> dict[str, Any]:
@@ -249,9 +283,9 @@ def _approve(saga_id: str, body: dict[str, Any], claims: dict[str, Any]) -> dict
     )
 
 
-def _ok(body: dict[str, Any]) -> dict[str, Any]:
+def _ok(body: dict[str, Any], *, status: int = 200) -> dict[str, Any]:
     return {
-        "statusCode": 200,
+        "statusCode": status,
         "headers": {"content-type": "application/json"},
         "body": json.dumps(scrub_mapping(body)),
     }

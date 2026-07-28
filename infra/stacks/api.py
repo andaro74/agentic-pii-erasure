@@ -133,10 +133,16 @@ class ApiStack(Stack):
             runtime=_RUNTIME,
             handler="pii_erasure.approval.api.lambda_handler",
             code=lambda_.Code.from_asset(SAGA_ASSET),
-            # An HTTP request that fans out to one saga invocation. The saga itself may
-            # take up to 15 minutes, and this waits on it — API Gateway's own 30s
-            # integration ceiling is the real limit, so this timeout exists to fail
-            # before the gateway does rather than after.
+            # This comment used to end "…so this timeout exists to fail before the
+            # gateway does rather than after", and every clause of it was true: the saga
+            # may run 15 minutes, API Gateway allows 30 seconds. The conclusion drawn was
+            # "pick a timeout that fails cleanly". The available conclusion was **this
+            # call cannot be synchronous** — and intake now is not (V11-3).
+            #
+            # 29 seconds still bounds what remains: reads and the approval resume, both
+            # of which are a checkpoint read plus at most a schedule write. If either
+            # ever approaches this, that is the signal to make it asynchronous too, not
+            # to raise the number.
             timeout=Duration.seconds(29),
             memory_size=512,
             environment={

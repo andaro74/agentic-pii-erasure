@@ -332,3 +332,75 @@ def test_a_leaked_email_is_scrubbed_from_every_response(monkeypatch: Any) -> Non
     saga = FakeSaga({**PAUSED, "manifest": leaky})
     response = _run(_event("GET /threads/{sagaId}"), saga, monkeypatch)
     assert "grace@example.invalid" not in response["body"]
+
+
+# ─── 6. intake is accepted, not completed (V11-3) ─────────────────────────────────────
+
+
+class FakeLambdaClient:
+    """Records the InvocationType, which is the whole point of these tests."""
+
+    def __init__(self) -> None:
+        self.invocations: list[dict[str, Any]] = []
+
+    def invoke(self, **kwargs: Any) -> dict[str, Any]:
+        self.invocations.append(kwargs)
+        if kwargs["InvocationType"] == "Event":
+            return {"StatusCode": 202}
+
+        class _Payload:
+            def read(self) -> bytes:
+                return b'{"status": "paused", "gate": "approval"}'
+
+        return {"StatusCode": 200, "Payload": _Payload()}
+
+
+def test_intake_does_not_wait_for_the_saga(monkeypatch: Any) -> None:
+    """The 503. `start` runs discovery, planning and every phase-2 soft delete — minutes
+    of work behind an API Gateway integration that allows 30 seconds. A synchronous intake
+    times out at 29s and reports failure for a saga that is running perfectly well."""
+    client = FakeLambdaClient()
+    monkeypatch.setattr(api, "_lambda", lambda: client)
+    response = api.lambda_handler(
+        _event(
+            "POST /requests",
+            body={
+                "sagaId": "saga_1",
+                "subjectRef": "sub_1",
+                "requestId": "req_1",
+                "tenantId": "t1",
+            },
+        ),
+        None,
+    )
+    assert response["statusCode"] == 202, "intake must report accepted, never completed"
+    assert [call["InvocationType"] for call in client.invocations] == ["Event"]
+
+
+def test_intake_returns_the_id_to_poll(monkeypatch: Any) -> None:
+    """A 202 with no handle is a request the operator cannot follow up on."""
+    monkeypatch.setattr(api, "_lambda", FakeLambdaClient)
+    response = api.lambda_handler(
+        _event(
+            "POST /requests",
+            body={
+                "sagaId": "saga_1",
+                "subjectRef": "sub_1",
+                "requestId": "req_1",
+                "tenantId": "t1",
+            },
+        ),
+        None,
+    )
+    parsed = json.loads(response["body"])
+    assert parsed["sagaId"] == "saga_1"
+    assert parsed["poll"] == "/threads/saga_1"
+
+
+def test_reads_still_wait(monkeypatch: Any) -> None:
+    """The fix must not make everything fire-and-forget: a read that does not wait has
+    nothing to return, and `describe` is bounded work."""
+    client = FakeLambdaClient()
+    monkeypatch.setattr(api, "_lambda", lambda: client)
+    api.lambda_handler(_event("GET /threads"), None)
+    assert [call["InvocationType"] for call in client.invocations] == ["RequestResponse"]
