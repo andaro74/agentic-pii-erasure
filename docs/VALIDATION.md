@@ -1179,6 +1179,30 @@ The slugifier substitutes **one hyphen per space, not per run**, matching
 a *double* hyphen — collapsing runs would have been tidier and would have quietly blessed
 links that GitHub 404s.
 
+### 2026-07-28 · V11-1 — the only path that needed the variable never exercised it
+
+| ID | Severity | Finding | Resolution |
+|---|---|---|---|
+| **V11-1** | **High** | **`saga/deps.py` has read `GRACE_SECONDS_OVERRIDE` since M5 and no stack ever set it.** A dev saga therefore fell back to the manifest's `graceWindowDays` — thirty days. Nothing failed and nothing warned: `tests/integration/` constructs `SagaDeps` directly and passes its own override, so the one code path that needed the environment variable was the one path that never ran with it. `make walkthrough` is that path, and M8's deployed gate would have sat at the grace gate for a month. | `infra/stacks/saga.py` sets it on non-prod stacks, alongside the two timers it already set. `tests/unit/test_saga_synth.py` now asserts all three are present **and short** — presence alone would pass for a "compression" of 30 days. Removing the line fails the new test, confirmed before commit. |
+
+**The shape is worth naming because it is not a typo.** Three wall-clock timers, two
+wired and one not, and the missing one was invisible precisely because the test suite was
+*better* than the deployment: injecting `SagaDeps` directly is the right way to unit-test
+a node, and it is exactly what stopped the gap from surfacing. A dependency-injection
+seam tests the code and skips the wiring, so wiring needs its own assertion — which is
+what `cdk synth` assertions are for, and why this one now exists.
+
+Found by sweeping every `⏳ lands at Mx` marker in `.env.example` as M8 closed, rather
+than by hitting it. `PII_ERASURE_GRACE_WINDOW_SECONDS` and
+`PII_ERASURE_APPROVAL_TIMEOUT_SECONDS` were marked "lands at M5 and M8"; both milestones
+had landed, so the markers were checked and one of the two turned out to be unwired. The
+same sweep is what caught `OTEL_SERVICE_NAME` still claiming M7 (V10-9's commit).
+
+**The stack now reads all three from the environment**, which is what `.env.example` has
+promised since M0 ("Compress via this parameter only — never by bypassing the scheduler").
+Defaults equal the previous hard-coded constants, so an unset environment deploys the
+behaviour that was already deployed.
+
 1. Read a doc claim as an adversary: *what would make this false, and could the
    named control detect it?*
 2. If the control can't go red, that's a finding — record it here with the fix and

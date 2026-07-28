@@ -192,8 +192,11 @@ Two layers by design, and only one of them is the control. **AgentCore Policy at
 approval/
 ├── gate.py           interrupt() payload construction; Command(resume=…) handling
 ├── tokens.py         mints tokens bound to sha256(canonical(manifest))
-├── presenter.py      blast radius, baseline diff, residual risk, irreversibility clock
-└── api.py            Lambda behind the Cognito-authenticated HTTP API
+├── presenter.py      SECTION_ORDER is a constant, not a parameter: residual risk and
+│                     anomalies first, inventory last and capped. The control is the
+│                     ordering — a bored approver still sees the finding
+└── api.py            Lambda behind the Cognito-authenticated HTTP API. Holds no
+                      graph: it validates, then invokes the saga executor
 
 ledger/
 ├── chain.py          each entry carries its predecessor's digest
@@ -206,8 +209,12 @@ observability/
 └── redact.py         PII scrubber. Used everywhere, including every Memory write. Invariant 5.
 
 cli/
-├── main.py           typer app
-└── commands/         seed · discover · walkthrough · inspect · ledger · threads · resume · approve
+├── main.py           typer app — parsing only; the eight commands live here
+├── operations.py     everything that talks to the deployed stack. Approval goes
+│                     THROUGH the authenticated API, with no bypass: absent operator
+│                     credentials fail loudly with the commands to create them
+└── walkthrough.py    the full arc, M8's deployed gate. Prints the pause as two
+                      identical reads seconds apart — nothing is running between them
 ```
 
 `threads` and `resume` are operator tools, not conveniences. A paused saga is a checkpoint row in DynamoDB with no running compute anywhere; operators need to list and resume them without the AWS console.
@@ -231,7 +238,9 @@ infra/
     ├── runtime.py         AgentCore Runtime for discovery · S3 code zip (ADR-025) ·
     │                      Memory store · a role with NO participant IAM
     ├── saga.py            saga-executor + resume Lambdas · Scheduler role · SQS DLQ
-    ├── api.py             HTTP API + Cognito authorizer for intake, approval, operator reads
+    ├── api.py             HTTP API + Cognito authorizer for intake, approval, operator
+    │                      reads. Its OWN operator pool — sharing the subjects pool
+    │                      would let a data subject authenticate to the approval API
     └── observability.py   alarms and dashboards for ARCHITECTURE §10.1
 ```
 
@@ -241,6 +250,7 @@ Assertions that live in `cdk synth` because a runtime test would be too late:
 - the DEK registry table has `pointInTimeRecovery` **disabled** and no AWS Backup selection (invariant 14, threat T9)
 - no Lambda in the stack has a VPC configuration
 - the ledger archive bucket has Object Lock in COMPLIANCE mode
+- **every operator API route carries a JWT authorizer**, and the route set matches a list written out verbatim in the test — one unauthenticated route is the entire human-in-the-loop control gone
 - the discovery Runtime role has no participant-service actions
 - every AgentCore Policy and PolicyEngine `Name` matches the pattern the **installed
   service model** declares — synth validates the template, not the service, so without

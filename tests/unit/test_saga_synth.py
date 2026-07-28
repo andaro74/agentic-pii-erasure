@@ -235,3 +235,38 @@ def test_scheduler_role_is_assumable_only_by_the_scheduler_service(
         ),
     )
     assert len(roles) == 1
+
+
+#: Every environment variable `deps.py` reads for wall-clock compression. Written out
+#: verbatim, because the failure this catches is a stack that reads none of them: the
+#: Lambda falls back to production timings and a dev walkthrough sits at the grace gate
+#: for thirty days, with nothing anywhere reporting a fault (V11-1).
+_DEV_TIMER_VARS = ("SWEEP_DELAYS_SECONDS", "APPROVAL_TIMEOUT_SECONDS", "GRACE_SECONDS_OVERRIDE")
+
+
+def _saga_environments(saga_template: Template) -> list[dict[str, str]]:
+    return [
+        body["Properties"]["Environment"]["Variables"]
+        for body in saga_template.to_json()["Resources"].values()
+        if body["Type"] == "AWS::Lambda::Function"
+    ]
+
+
+@pytest.mark.parametrize("name", _DEV_TIMER_VARS)
+def test_a_dev_stack_compresses_every_wall_clock_timer(saga_template: Template, name: str) -> None:
+    """`GRACE_SECONDS_OVERRIDE` was read by `deps.py` from M5 and set by no stack until
+    M8. Nothing failed, because the integration suite builds `SagaDeps` directly and
+    supplies its own override — so the only path that needed the environment variable was
+    the only path that never exercised it."""
+    environments = _saga_environments(saga_template)
+    assert environments, "no saga functions found — this test would pass vacuously"
+    for environment in environments:
+        assert name in environment, f"a dev saga Lambda has no {name}"
+
+
+def test_the_compressed_timers_are_actually_short(saga_template: Template) -> None:
+    """A "compression" that set 30 days would satisfy the presence check above and
+    demonstrate nothing."""
+    for environment in _saga_environments(saga_template):
+        assert int(environment["GRACE_SECONDS_OVERRIDE"]) <= 3600
+        assert int(environment["APPROVAL_TIMEOUT_SECONDS"]) <= 24 * 3600

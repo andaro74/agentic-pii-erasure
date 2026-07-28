@@ -23,6 +23,7 @@ Two deliberate ARN constructions avoid CFN reference cycles:
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from aws_cdk import ArnFormat, CfnOutput, Duration, Stack
@@ -40,11 +41,20 @@ SAGA_ASSET = str(Path(__file__).resolve().parents[1] / "build" / "saga")
 
 _RUNTIME = lambda_.Runtime.PYTHON_3_12
 
-#: Dev stages compress the wall-clock timers so `make integration` completes in
-#: minutes: sweeps at T+2min/T+4min instead of T+7d/T+30d, approval timeout at one
-#: hour instead of 14 days. The *sequence* is identical — only the delays shrink.
-_DEV_SWEEP_DELAYS = "120,240"
-_DEV_APPROVAL_TIMEOUT = "3600"
+#: Dev stages compress the wall-clock timers so `make integration` and `make walkthrough`
+#: complete in minutes: sweeps at T+2min/T+4min instead of T+7d/T+30d, approval timeout at
+#: one hour instead of 14 days. The *sequence* is identical — only the delays shrink, and
+#: the scheduler still fires. Bypassing it would exercise a path that does not exist in
+#: production, which is the difference between a demonstration and a simulation.
+#:
+#: Read from the environment because `.env.example` has promised exactly that since M0
+#: ("Compress via this parameter only") and both named milestones then landed without
+#: wiring it — the same drift ADR-025 left in ADR-015, caught here by checking every ⏳
+#: marker as M8 closed. The defaults are what the constants used to be, so an unset
+#: environment deploys the behaviour that was already deployed.
+_DEV_SWEEP_DELAYS = os.environ.get("PII_ERASURE_SWEEP_DELAYS_SECONDS", "120,240")
+_DEV_APPROVAL_TIMEOUT = os.environ.get("PII_ERASURE_APPROVAL_TIMEOUT_SECONDS", "3600")
+_DEV_GRACE_WINDOW = os.environ.get("PII_ERASURE_GRACE_WINDOW_SECONDS", "120")
 
 
 class SagaStack(Stack):
@@ -119,6 +129,13 @@ class SagaStack(Stack):
         if not prod:
             environment["SWEEP_DELAYS_SECONDS"] = _DEV_SWEEP_DELAYS
             environment["APPROVAL_TIMEOUT_SECONDS"] = _DEV_APPROVAL_TIMEOUT
+            # `deps.py` has read GRACE_SECONDS_OVERRIDE since M5 and no stack ever set
+            # it, so a dev saga fell back to the manifest's graceWindowDays — 30 days.
+            # Nothing failed: the integration suite constructs `SagaDeps` directly and
+            # passes its own override, so the one path that needed this was the one path
+            # that never exercised it. `make walkthrough` is that path, and it would have
+            # sat at the grace gate for a month (V11-1).
+            environment["GRACE_SECONDS_OVERRIDE"] = _DEV_GRACE_WINDOW
 
         self.executor_fn = self._saga_function(
             "SagaExecutor",

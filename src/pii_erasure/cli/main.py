@@ -29,15 +29,12 @@ app = typer.Typer(
 )
 _console = Console(stderr=True)
 
-# command name -> milestone that makes it real (docs/ROADMAP.md)
-_UNBUILT: dict[str, str] = {
-    "ledger": "M5",
-    "discover": "M7",
-    "walkthrough": "M8",
-    "threads": "M8",
-    "resume": "M8",
-    "approve": "M8",
-}
+#: command name -> milestone that makes it real (docs/ROADMAP.md).
+#: **Empty as of M8**, which is what the module docstring predicted. Kept rather than
+#: deleted: the next command someone adds ahead of its milestone belongs here, and
+#: `_unbuilt` is the mechanism that makes "not built yet" exit non-zero instead of
+#: pretending success.
+_UNBUILT: dict[str, str] = {}
 
 
 @app.callback()
@@ -260,40 +257,114 @@ def _seed_clients() -> dict[str, Any]:
     }
 
 
-@app.command(context_settings=_PASSTHROUGH)
-def ledger(ctx: typer.Context) -> None:
-    """Print the hash-chained audit ledger and verify the chain. (M5)"""
-    _unbuilt("ledger")
+@app.command()
+def ledger(
+    verify: Annotated[bool, typer.Option("--verify", help="Verify the hash chain")] = False,
+    saga: Annotated[str, typer.Option("--saga", help="One saga, or omit for all")] = "",
+) -> None:
+    """Print the hash-chained audit ledger and verify the chain."""
+    from pii_erasure.cli import operations
+
+    verified, entries = operations.verify_ledger(saga or None)
+    if not entries:
+        _console.print("no ledger entries — has a saga run against this stage?")
+        raise typer.Exit(code=1)
+    for entry in entries:
+        typer.echo(
+            f"{entry.saga_id}  #{entry.seq:<3} {entry.at}  {entry.event_type:<24} "
+            f"{entry.digest[:19]}"
+        )
+    if verify:
+        _console.print(f"\n✅ chain verified across {verified} entries")
 
 
-@app.command(context_settings=_PASSTHROUGH)
-def discover(ctx: typer.Context) -> None:
-    """Run discovery for one subject against the deployed stack. (M7)"""
-    _unbuilt("discover")
+@app.command()
+def discover(
+    subject: Annotated[str, typer.Option("--subject", help="Pseudonymous subject handle")],
+    tenant: Annotated[str, typer.Option("--tenant")] = "default",
+) -> None:
+    """Run discovery for one subject against the deployed AgentCore Runtime."""
+    from pii_erasure.cli import operations
+
+    result = operations.run_discovery(subject, tenant=tenant)
+    systems = result.get("systems") or result.get("participants") or []
+    _console.print(f"discovered {len(systems)} system(s) for {subject}")
+    for degraded in result.get("degraded") or []:
+        _console.print(f"  ⚠ degraded: {degraded}")
+    typer.echo(json.dumps(result, indent=2, sort_keys=True))
 
 
-@app.command(context_settings=_PASSTHROUGH)
-def walkthrough(ctx: typer.Context) -> None:
-    """The full arc: discover → soft delete → pause → hard delete → certificate. (M8)"""
-    _unbuilt("walkthrough")
+@app.command()
+def threads(
+    list_: Annotated[bool, typer.Option("--list", help="List every known thread")] = False,
+    thread: Annotated[str, typer.Option("--thread", help="Show one thread's review")] = "",
+) -> None:
+    """List checkpoint threads and their paused state — nothing is running."""
+    from pii_erasure.cli import operations
+
+    if thread:
+        typer.echo(operations.review_text(thread))
+        return
+    if not list_:
+        _console.print("pass --list, or --thread <sagaId> for one saga's review")
+        raise typer.Exit(code=1)
+
+    found = operations.list_threads()
+    rows = found.get("threads") or []
+    if not rows:
+        _console.print("no threads — the checkpointer is empty for this stage")
+        return
+    for row in rows:
+        gate = row.get("gate") or "-"
+        typer.echo(f"{row['thread_id']:<28} {row.get('status')!s:<10} gate={gate}")
+    # ADR-016's property, stated where an operator will actually read it: the pause is a
+    # row in DynamoDB, not a held invocation. No Lambda is running for any line above.
+    _console.print(
+        f"\n{len(rows)} thread(s). None is holding compute — each pause is a checkpoint."
+    )
+    if found.get("truncated"):
+        _console.print("⚠ truncated — pass a larger limit to see the rest")
 
 
-@app.command(context_settings=_PASSTHROUGH)
-def threads(ctx: typer.Context) -> None:
-    """List checkpoint threads and their paused state. (M8)"""
-    _unbuilt("threads")
+@app.command()
+def resume(
+    thread: Annotated[str, typer.Option("--thread", help="Saga id to resume")],
+) -> None:
+    """Manually resume a paused saga (grace, sweep, or stuck — never approval)."""
+    from pii_erasure.cli import operations
+
+    result = operations.resume_thread(thread)
+    typer.echo(json.dumps(result, indent=2, sort_keys=True))
 
 
-@app.command(context_settings=_PASSTHROUGH)
-def resume(ctx: typer.Context) -> None:
-    """Manually resume a paused saga. (M8)"""
-    _unbuilt("resume")
+@app.command()
+def approve(
+    thread: Annotated[str, typer.Option("--thread", help="Saga id at the approval gate")],
+    decision: Annotated[str, typer.Option("--decision", help="approve | deny")],
+    show: Annotated[bool, typer.Option("--show", help="Print the review first")] = True,
+) -> None:
+    """Approve or deny a paused saga, through the authenticated API."""
+    from pii_erasure.cli import operations
+
+    if decision not in {"approve", "deny"}:
+        _console.print("--decision must be 'approve' or 'deny'")
+        raise typer.Exit(code=2)
+    if show:
+        typer.echo(operations.review_text(thread))
+        typer.echo("")
+    result = operations.submit_decision(thread, decision)
+    _console.print(f"{decision} recorded for {thread}: {result.get('status')}")
 
 
-@app.command(context_settings=_PASSTHROUGH)
-def approve(ctx: typer.Context) -> None:
-    """Approve or deny a paused saga. (M8)"""
-    _unbuilt("approve")
+@app.command()
+def walkthrough(
+    subject: Annotated[str, typer.Option("--subject")] = "",
+    tenant: Annotated[str, typer.Option("--tenant")] = "default",
+) -> None:
+    """The full arc: discover → soft delete → pause → approve → grace → hard → certificate."""
+    from pii_erasure.cli import walkthrough as arc
+
+    raise typer.Exit(code=arc.run(subject=subject or None, tenant=tenant))
 
 
 if __name__ == "__main__":

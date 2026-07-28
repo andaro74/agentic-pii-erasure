@@ -228,6 +228,25 @@ There is no local mode ([ADR-017](adr/ADR-017-real-aws-participants.md)), so fro
 
 ## - [ ] M8 · The operator surface and the deployed walkthrough
 
+> **Hermetic half landed 2026-07-28.** `approval/presenter.py` (ordering as the control),
+> `approval/api.py` + `infra/stacks/api.py` (Cognito-authenticated, every route asserted),
+> `cli/operations.py` + `cli/walkthrough.py`, and the six operator commands. `_UNBUILT` in
+> `cli/main.py` is now **empty**, which the M0 docstring predicted would happen here.
+>
+> **Two read-only saga actions were needed and are the interesting part.** `describe` and
+> `threads` let an operator see a paused saga *without* resuming it. LangGraph persists a
+> `Command(resume=…)` against the pending interrupt before the node consumes it, so a
+> "read" implemented as a no-op resume would wedge every saga an operator inspected — and
+> would keep looking like a working read until the next legitimate approval (V9-3).
+>
+> **Approval has no bypass, deliberately.** `erasure approve` obtains a Cognito token and
+> calls the authenticated route; missing operator credentials fail with the exact
+> `admin-create-user` commands rather than falling back to invoking the Lambda. A fallback
+> would have made every walkthrough green over a control nobody exercised.
+>
+> Remaining for the tick: `make deploy-dev`, an operator in `asdp-approvers`, then
+> `make walkthrough` twice.
+
 **Build:** `approval/presenter.py` (anomaly-first: baseline diff and residual risk **first**, never a 400-row inventory) · `approval/api.py` and `infra/stacks/api.py` (Cognito-authenticated HTTP API for intake, approval, and operator reads) · CLI: `discover`, `walkthrough`, `threads`, `resume`, `approve`, `ledger`.
 
 **Hermetic done when:** `make check` green with — the presenter puts **baseline diff and residual risk before any inventory row**, asserted by a test that fails on the reverse ordering (the trap below is that the presenter is a control, so "it renders" is not the property) · an approval request whose `manifest_digest` does not match the manifest is rejected **before a token is minted**, never after (invariant 3) · `cdk synth` asserts every route on the HTTP API carries the Cognito authorizer, since one unauthenticated approval route is the entire HITL control gone · each new CLI command exists and exits non-zero while unbuilt, per M0's convention.
