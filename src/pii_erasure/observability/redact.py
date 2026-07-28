@@ -42,6 +42,32 @@ _DENY_KEYS = frozenset(
 # subject_ref / sagaId style handles are pseudonymous and MUST survive scrubbing
 # unchanged — a scrubber that eats the correlation key is as useless as one that
 # leaks PII. Enforced by test, not just intent.
+#
+# That principle was written here at M0 and tested for `subject_ref` alone. Two other
+# structural identifiers turned out to need it just as much, and both were being
+# corrupted (V11-6):
+#
+#   * **sha256 digests.** The phone rule matches any run of 7+ digits, and a hex digest
+#     contains such runs about 64% of the time. `sha256:4e074085…` became
+#     `sha256:4e[REDACTED]bedb…`. Invariant 3 binds approval to exactly these bytes, so a
+#     mangled digest is not a cosmetic defect — the approval API compared what the
+#     operator echoed against the real digest and refused a legitimate approval as a
+#     changed plan. Intermittently, which is worse than always.
+#   * **AWS ARNs.** A 12-digit account id is phone-shaped:
+#     `arn:aws:kms:us-west-2:[REDACTED]:key/…`. That breaks the signing-key correlation
+#     an auditor follows.
+#
+# Neither can carry PII: a 64-char hex string and an ARN have no room for a name or an
+# address. So they are matched FIRST and copied through untouched, and only the text
+# between them is scrubbed — an email beside a digest is still redacted.
+_PRESERVED = re.compile(
+    r"""(?:
+        sha256:[0-9a-fA-F]{64}      # digests, prefixed
+      | \b[0-9a-f]{64}\b            # digests and idempotency keys, bare
+      | arn:aws[a-z0-9-]*:[^\s"',]+ # ARNs, including the 12-digit account id
+    )""",
+    re.VERBOSE,
+)
 
 
 class PIIRejectedError(ValueError):
@@ -55,7 +81,23 @@ class PIIRejectedError(ValueError):
 
 
 def scrub(text: str) -> str:
-    """Return *text* with every recognised PII form replaced by ``[REDACTED]``."""
+    """Return *text* with every recognised PII form replaced by ``[REDACTED]``.
+
+    Structural identifiers — digests, ARNs — are carried through verbatim; everything
+    around them is scrubbed normally. See `_PRESERVED` for why that is safe and why it
+    is necessary.
+    """
+    out: list[str] = []
+    cursor = 0
+    for match in _PRESERVED.finditer(text):
+        out.append(_apply_patterns(text[cursor : match.start()]))
+        out.append(match.group(0))
+        cursor = match.end()
+    out.append(_apply_patterns(text[cursor:]))
+    return "".join(out)
+
+
+def _apply_patterns(text: str) -> str:
     for _rule, pattern in _PATTERNS:
         text = pattern.sub(REDACTED, text)
     return text

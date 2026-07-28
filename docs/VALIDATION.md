@@ -1254,6 +1254,20 @@ V11-4c deserves one more line. It is the fourth "a gate that cannot gate" in thi
 
 **This is the failure mode of a claim shape assumed rather than read.** ROADMAP rule 3 says to verify API shapes against the service's documentation rather than memory, and it has been applied faithfully to AgentCore all through M6–M7 — where the APIs were new and obviously uncertain. It was not applied here, to a claim encoding that felt too ordinary to check. The four V10 findings were all AgentCore; the boring integration is where this one hid.
 
+### 2026-07-28 · V11-6 — the PII scrubber corrupted the value invariant 3 binds to
+
+| ID | Severity | Finding | Resolution |
+|---|---|---|---|
+| **V11-6** | **Critical** | **`scrub` mangled sha256 digests.** The phone rule matches any run of 7+ digits, and a hex digest contains one roughly **64% of the time** — measured: 128 of 200. `sha256:4e074085…` became `sha256:4e[REDACTED]bedb…`. `presenter.present()` scrubs its output, so the operator's review showed a corrupted digest, echoed it back, and the approval API compared it against the real one and refused a legitimate approval as a *changed plan*. The control fired correctly on corrupted input, which is the hardest possible failure to read from its own error message. AWS ARNs were corrupted the same way — a 12-digit account id is phone-shaped. | `_PRESERVED` matches digests (prefixed and bare) and ARNs first; those spans are copied through verbatim and only the text between them is scrubbed. Neither shape has room for a name or an address, so the exemption costs nothing. Tests cover 300 digests, bare idempotency keys, ARNs, and — critically — that PII *adjacent* to a preserved span is still redacted, so the exemption cannot become a hiding place. |
+
+**The consequence reaches the audit record.** `LedgerWriter.append` scrubs bodies on the way in, so every `MANIFEST_SIGNED` entry already written carries a corrupted `manifestDigest`. The hash chain still verifies — it is computed over the scrubbed body — but the digest an auditor would use to tie a ledger entry back to the manifest it describes is wrong. On the dev stack that is fabricated data and needs no remediation; on a real deployment it would need a documented re-derivation, because the chain being intact makes the corruption *invisible* to the tool built to detect tampering.
+
+**The principle was already written in this file, at M0, in the same module:**
+
+> *"subject_ref / sagaId style handles are pseudonymous and MUST survive scrubbing unchanged — a scrubber that eats the correlation key is as useless as one that leaks PII. Enforced by test, not just intent."*
+
+It was enforced by test — for `subject_ref`. Digests and ARNs are the same class of value and were never added. That is the fourth instance of this exact pattern ([V10-5](#2026-07-27--v10-5--the-cache-strip-that-named-two-of-three-assets), [V10-8](#2026-07-27--v10-8--the-harness-tried-to-borrow-the-identity-it-was-measuring), [V11-3](#2026-07-28--v11-3--a-saga-behind-an-http-request-and-a-comment-that-said-so), now this): **a rule stated in prose, enforced for the one case that prompted it, and never extended to the class it describes.** The check that would have caught all four is the same question — *what else is in this category?* — asked at the moment the rule is written rather than at the moment it breaks.
+
 1. Read a doc claim as an adversary: *what would make this false, and could the
    named control detect it?*
 2. If the control can't go red, that's a finding — record it here with the fix and

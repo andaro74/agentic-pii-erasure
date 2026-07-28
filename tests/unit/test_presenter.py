@@ -307,3 +307,22 @@ def test_a_system_listed_twice_in_one_deletion_counts_once() -> None:
 
 def test_an_empty_history_is_unusable_rather_than_perfect() -> None:
     assert not baseline_from_history([]).is_usable
+
+
+def test_the_digest_the_approver_echoes_is_the_digest_that_was_signed() -> None:
+    """The whole approval binding, end to end through the view (V11-6).
+
+    `present()` scrubs its output, and the scrubber's phone rule used to eat digit runs
+    inside the hex digest. The operator then echoed a `[REDACTED]`-spliced digest, the API
+    compared it against the real one, and a legitimate approval was refused as a changed
+    plan — the control firing correctly on corrupted input, which is the hardest kind of
+    bug to read from the error message.
+    """
+    import hashlib
+
+    for i in range(50):
+        digest = f"sha256:{hashlib.sha256(str(i).encode()).hexdigest()}"
+        manifest = _manifest()
+        manifest = manifest.model_copy(update={"digest": digest})
+        view = present(manifest, baseline=_rich_baseline())
+        assert view["manifestDigest"] == digest, "the view corrupted the approval binding"
