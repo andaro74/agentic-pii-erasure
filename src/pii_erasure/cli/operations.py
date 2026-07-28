@@ -24,6 +24,7 @@ import os
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from typing import Any
 
 from pii_erasure.approval.presenter import baseline_from_history, present, render_text
@@ -308,7 +309,11 @@ TERMINAL_STATUSES = frozenset({"completed", "compensated", "blocked", "stuck", "
 
 
 def wait_for(
-    thread_id: str, *, gate: str | None = None, status: str | None = None
+    thread_id: str,
+    *,
+    gate: str | None = None,
+    status: str | None = None,
+    notify: Callable[[str], None] | None = None,
 ) -> dict[str, Any]:
     """Poll the checkpoint until the saga reaches a gate or a terminal status.
 
@@ -324,9 +329,20 @@ def wait_for(
     started = time.time()
     deadline = started + POLL_TIMEOUT_SECONDS
     last: dict[str, Any] = {}
+    seen = ""
     while time.time() < deadline:
         last = describe_thread(thread_id)
         current = str(last.get("status") or "")
+        # Say something. Discovery alone runs ~40 seconds and phase 2 visits eight real
+        # services, so a silent poll looks identical to a hang — which is exactly how
+        # V11-4 was first reported ("why does the terminal get stuck?"). Progress is
+        # printed on change and at least once a minute.
+        if notify is not None:
+            elapsed = int(time.time() - started)
+            marker = f"{current}/{last.get('gate')}"
+            if marker != seen or elapsed % 60 < POLL_INTERVAL_SECONDS:
+                notify(f"   [{elapsed:>4}s] status={current or '?'} gate={last.get('gate')}")
+                seen = marker
         if gate and last.get("gate") == gate:
             return last
         if status and current == status:

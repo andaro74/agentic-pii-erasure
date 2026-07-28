@@ -22,8 +22,10 @@ simulation (ADR-017's objection, applied to our own tooling).
 
 from __future__ import annotations
 
+import json
 import time
 import uuid
+from pathlib import Path
 from typing import Any
 
 from rich.console import Console
@@ -48,8 +50,43 @@ _STEPS = (
 )
 
 
+#: Where `make seed` writes the placement map. The walkthrough reads it to pick a subject
+#: that actually HAS data, which is the difference between demonstrating an erasure and
+#: demonstrating a lookup that finds nothing.
+GROUND_TRUTH = Path("evals/fixtures/ground-truth.json")
+
+
+def seeded_subject() -> str:
+    """A subject the fixtures actually placed data for.
+
+    The first version generated `sub_<random>`. Discovery then correctly found nothing
+    anywhere, the plan had zero participants, and the saga died on a pydantic validation
+    error 37 seconds in (V11-4). Inventing an identifier and expecting data behind it was
+    the bug — the generator emits the map for exactly this reason (ADR-020), so the
+    walkthrough reads it rather than guessing.
+    """
+    if not GROUND_TRUTH.is_file():
+        raise OperationError(
+            f"{GROUND_TRUTH} not found — run `make seed` first. The walkthrough erases a "
+            f"seeded subject; it cannot invent one, because a subject with no data "
+            f"anywhere produces an empty plan and demonstrates nothing."
+        )
+    subjects = json.loads(GROUND_TRUTH.read_text(encoding="utf-8")).get("subjects", {})
+    placed = {ref: systems for ref, systems in subjects.items() if systems}
+    if not placed:
+        raise OperationError(f"{GROUND_TRUTH} records no placed artifacts — re-run `make seed`.")
+    # The subject touching the MOST systems: a walkthrough that exercises one participant
+    # proves less than one that exercises seven, and phase 3's per-participant loop is
+    # where ordering and residual honesty actually show up.
+    return str(max(placed, key=lambda ref: len(placed[ref])))
+
+
 def run(*, subject: str | None = None, tenant: str = "default") -> int:
-    subject_ref = subject or f"sub_{uuid.uuid4().hex[:12]}"
+    try:
+        subject_ref = subject or seeded_subject()
+    except OperationError as error:
+        _console.print(f"\n❌ walkthrough FAILED: {error}")
+        return 1
     saga_id = f"saga_{uuid.uuid4().hex[:12]}"
     started = time.time()
     try:
@@ -77,7 +114,7 @@ def _arc(*, saga_id: str, subject_ref: str, tenant: str) -> None:
     )
 
     _step(1)
-    state = operations.wait_for(saga_id, gate="approval")
+    state = operations.wait_for(saga_id, gate="approval", notify=_console.print)
     manifest = state.get("manifest") or {}
     participants = manifest.get("participants") or []
     _console.print(f"   planned {len(participants)} participant(s)")
@@ -100,7 +137,7 @@ def _arc(*, saga_id: str, subject_ref: str, tenant: str) -> None:
     _console.print("   waiting for the scheduler — compressed by stack parameter, not skipped")
 
     _step(6)
-    final = operations.wait_for(saga_id, status="completed")
+    final = operations.wait_for(saga_id, status="completed", notify=_console.print)
 
     _step(7)
     _certificate(saga_id, final)
@@ -122,6 +159,14 @@ def _show_the_pause(saga_id: str) -> None:
         raise OperationError("the saga moved while nobody resumed it — that is not a pause")
 
 
+#: What a completed erasure must have written down. Exact event types, **uppercase** —
+#: this check first compared lowercase strings against `APPROVAL_GRANTED` and
+#: `HARD_DELETE_APPLIED`, so it could never have matched and would have failed the gate on
+#: a flawless run (V11-4). `test_walkthrough_certificate.py` pins these against the names
+#: the nodes actually emit, so a rename breaks a unit test rather than a deployed gate.
+REQUIRED_LEDGER_EVENTS = frozenset({"APPROVAL_GRANTED", "HARD_DELETE_APPLIED", "SAGA_COMPLETED"})
+
+
 def _certificate(saga_id: str, final: dict[str, Any]) -> None:
     verified, entries = operations.verify_ledger(saga_id)
     residuals = final.get("residual_count", 0)
@@ -129,11 +174,11 @@ def _certificate(saga_id: str, final: dict[str, Any]) -> None:
     _console.print(f"   residuals disclosed: {residuals}")
     if not entries:
         raise OperationError("a completed saga produced no ledger entries")
-    kinds = [entry.event_type for entry in entries]
-    for required in ("approval_granted", "hard_delete_applied"):
-        if not any(required in kind for kind in kinds):
-            # A certificate that does not evidence the deletion is a receipt for nothing.
-            raise OperationError(f"no ledger entry evidencing {required!r} — entries: {kinds}")
+    kinds = {entry.event_type for entry in entries}
+    missing = sorted(REQUIRED_LEDGER_EVENTS - kinds)
+    if missing:
+        # A certificate that does not evidence the deletion is a receipt for nothing.
+        raise OperationError(f"no ledger entry evidencing {missing} — entries: {sorted(kinds)}")
 
 
 def _step(index: int) -> None:

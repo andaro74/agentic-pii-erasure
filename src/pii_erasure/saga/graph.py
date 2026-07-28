@@ -49,7 +49,6 @@ def build_graph(deps: SagaDeps, checkpointer: Any) -> CompiledStateGraph[SagaSta
     builder.add_node("compensate", make_compensate(deps))
 
     builder.add_edge(START, "intake")
-    builder.add_edge("plan", "hold_check")
     for node, path_map in PATH_MAPS.items():
         builder.add_conditional_edges(node, ROUTERS[node], path_map)
     builder.add_edge("sweep", END)

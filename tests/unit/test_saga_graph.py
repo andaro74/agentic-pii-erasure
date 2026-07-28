@@ -600,3 +600,34 @@ def test_an_unknown_gate_accepts_no_resume_at_all() -> None:
     assert not _answers_gate("approval", None)
     assert _answers_gate("approval", {"decision": "deny"})
     assert _answers_gate("sweep", {"wake_reason": "sweep_t7"})
+
+
+# ─── discovery that finds nothing (V11-4) ─────────────────────────────────────────────
+
+
+def test_an_empty_discovery_is_a_terminal_state_not_a_crash() -> None:
+    """A subject the controller holds no data on is a legitimate request, not an error.
+
+    `Manifest` requires at least one participant — deliberately — so building one from an
+    empty sweep raised a pydantic ValidationError *inside a graph node*. The saga died
+    mid-graph, an asynchronous intake swallowed the traceback, and the operator watched a
+    poll that never advanced. Art. 12(3) still owes that person an answer; the answer is
+    "nothing to erase", and it needs a state rather than a stack trace.
+    """
+    from langgraph.graph import END
+
+    from pii_erasure.saga.edges import PATH_MAPS, route_after_plan
+    from pii_erasure.saga.state import STATUS_NO_DATA
+
+    assert route_after_plan({"status": STATUS_NO_DATA}) == "nothing"
+    assert route_after_plan({"status": "running"}) == "continue"
+    assert PATH_MAPS["plan"]["nothing"] is END
+    assert PATH_MAPS["plan"]["continue"] == "hold_check"
+
+
+def test_no_data_is_distinct_from_completed() -> None:
+    """A certificate must never imply deletions that did not happen. `completed` means
+    the erasure ran; `no_data` means there was nothing to run."""
+    from pii_erasure.saga.state import STATUS_COMPLETED, STATUS_NO_DATA
+
+    assert STATUS_NO_DATA != STATUS_COMPLETED

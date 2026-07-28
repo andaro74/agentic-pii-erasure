@@ -158,3 +158,8 @@ STATUS_STUCK = "stuck"  # phase 3 halt: SQS DLQ raised, forward recovery only
 STATUS_ABORTED = "aborted"  # post-approval digest mismatch — nothing irreversible ran
 STATUS_ALREADY_TOMBSTONED = "already_tombstoned"
 STATUS_RUNNING = "running"
+#: Discovery completed and found nothing anywhere. A legitimate terminal outcome, not a
+#: failure: a subject you hold no data on is still owed an answer under Art. 12(3), and
+#: the answer is "nothing to erase". Kept distinct from `completed` on purpose — a
+#: certificate must never imply deletions that never happened.
+STATUS_NO_DATA = "no_data"

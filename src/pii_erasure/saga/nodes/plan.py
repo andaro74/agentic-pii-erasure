@@ -25,6 +25,7 @@ from typing import Any
 from pii_erasure.manifest import Manifest, validate_manifest, with_digest
 from pii_erasure.saga.deps import SagaDeps
 from pii_erasure.saga.ordering import validate_order
+from pii_erasure.saga.state import STATUS_NO_DATA
 
 
 class PlanSourceUnavailableError(RuntimeError):
@@ -101,6 +102,22 @@ def make_plan(deps: SagaDeps) -> Callable[[dict[str, Any]], dict[str, Any]]:
                 tenant=state.get("tenant", "default"),
             )
             provided = build_manifest_body(body, request_id=state["request_id"])
+
+        # Discovery completed and found the subject nowhere. That is a legitimate
+        # answer — a controller who holds no data on someone still owes them a reply
+        # under Art. 12(3) — and it is NOT an invalid manifest. `Manifest` requires at
+        # least one participant, deliberately, so building one here raised a pydantic
+        # ValidationError inside the node: the saga died mid-graph, an async intake
+        # swallowed the traceback, and the operator saw a poll that never advanced
+        # (V11-4). The empty case is now a terminal state with its own status.
+        if not (provided.get("participants") or []):
+            deps.ledger.append(
+                saga_id=state["saga_id"],
+                event_type="DISCOVERY_FOUND_NOTHING",
+                body={"subjectRef": state["subject_ref"]},
+            )
+            return {"status": STATUS_NO_DATA}
+
         manifest = Manifest.model_validate(provided)
 
         if manifest.saga_id != state["saga_id"] or manifest.subject_ref != state["subject_ref"]:

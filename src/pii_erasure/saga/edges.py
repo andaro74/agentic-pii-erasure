@@ -25,6 +25,7 @@ from pii_erasure.saga.state import (
     STATUS_ABORTED,
     STATUS_ALREADY_TOMBSTONED,
     STATUS_BLOCKED,
+    STATUS_NO_DATA,
     STATUS_STUCK,
 )
 
@@ -34,6 +35,10 @@ PHASE3_NODES: tuple[str, ...] = ("hard_delete", "verify", "sweep")
 #: Every conditional route in the graph. Labels are semantic, targets are node names.
 PATH_MAPS: dict[str, dict[str, Any]] = {
     "intake": {"continue": "plan", "halt": END},
+    # "nothing" is a SUCCESSFUL end: discovery ran, found no data, and there is
+    # nothing to soft-delete or approve. Routing it through the gates would ask a
+    # human to approve the deletion of nothing (V11-4).
+    "plan": {"continue": "hold_check", "nothing": END},
     "hold_check": {"continue": "soft_delete", "blocked": END},
     "soft_delete": {"continue": "approval_gate", "failed": "compensate"},
     "approval_gate": {"approved": "grace_window", "unwound": "compensate"},
@@ -50,6 +55,10 @@ PATH_MAPS: dict[str, dict[str, Any]] = {
 
 def route_after_intake(state: dict[str, Any]) -> str:
     return "halt" if state.get("status") == STATUS_ALREADY_TOMBSTONED else "continue"
+
+
+def route_after_plan(state: dict[str, Any]) -> str:
+    return "nothing" if state.get("status") == STATUS_NO_DATA else "continue"
 
 
 def route_after_hold_check(state: dict[str, Any]) -> str:
@@ -88,6 +97,7 @@ def route_after_verify(state: dict[str, Any]) -> str:
 
 ROUTERS = {
     "intake": route_after_intake,
+    "plan": route_after_plan,
     "hold_check": route_after_hold_check,
     "soft_delete": route_after_soft_delete,
     "approval_gate": route_after_approval_gate,
