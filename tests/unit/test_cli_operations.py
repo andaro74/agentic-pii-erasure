@@ -201,3 +201,34 @@ def test_entries_are_ordered_before_verification(monkeypatch: pytest.MonkeyPatch
     monkeypatch.setattr(operations, "ledger_entries", lambda saga_id=None: list(reversed(entries)))
     verified, _ = operations.verify_ledger()
     assert verified == 4
+
+
+def test_the_example_operator_cannot_reach_a_real_person() -> None:
+    """The address in the copy-paste instructions is on a reserved TLD.
+
+    Cognito needs a username that *parses* as an email and never checks the mailbox, so
+    an example address here is a demo credential, not a contact. `.invalid` is reserved
+    by RFC 6761 and cannot resolve — which matters because instructions get copied
+    verbatim, and a plausible-looking real domain in a deletion tool's setup steps is one
+    typo away from mailing a stranger.
+    """
+    assert operations.EXAMPLE_OPERATOR.endswith(".invalid")
+
+
+def test_the_instructions_use_the_reserved_address_throughout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """All three commands, not just the first — a half-substituted example is worse than
+    none, because the mismatch between --username values fails on the second step."""
+    monkeypatch.delenv("PII_ERASURE_OPERATOR_USER", raising=False)
+    monkeypatch.delenv("PII_ERASURE_OPERATOR_PASSWORD", raising=False)
+    monkeypatch.setattr(
+        operations,
+        "outputs",
+        lambda *stacks: {"OperatorPoolId": "pool-1", "OperatorClientId": "client-1"},
+    )
+    with pytest.raises(OperationError) as raised:
+        operations.operator_token()
+    message = str(raised.value)
+    assert message.count(operations.EXAMPLE_OPERATOR) == 4, message
+    assert "example.com" not in message

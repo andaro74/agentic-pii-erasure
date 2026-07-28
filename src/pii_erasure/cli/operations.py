@@ -38,6 +38,18 @@ POLL_TIMEOUT_SECONDS = 900
 POLL_INTERVAL_SECONDS = 10
 
 
+#: The operator pool synthesises as `UsernameAttributes: ["email"]`, so a username must
+#: **parse** as an address — Cognito validates the shape and never the mailbox. With
+#: `--message-action SUPPRESS` and a `--permanent` password no mail is ever attempted, so
+#: a real inbox is not needed and asking for one would invite a real address into a demo
+#: system. `.invalid` is reserved by RFC 6761 and cannot resolve, so this example can
+#: never reach anybody even if a later change stops suppressing.
+#:
+#: The audit trail is unaffected by the choice: `approval/api.py` records the Cognito
+#: `sub` — a UUID — as the approver, never the address.
+EXAMPLE_OPERATOR = "operator@example.invalid"
+
+
 class OperationError(RuntimeError):
     """A deployed-stack operation failed in a way the operator must see."""
 
@@ -150,11 +162,13 @@ def operator_token() -> str:
             "no operator credentials. Approval must go through the authenticated API, so "
             "there is no bypass here on purpose. Create one:\n\n"
             f"  aws cognito-idp admin-create-user --user-pool-id {api['OperatorPoolId']} \\\n"
-            "      --username you@example.com --message-action SUPPRESS\n"
+            f"      --username {EXAMPLE_OPERATOR} --message-action SUPPRESS \\\n"
+            f"      --user-attributes Name=email,Value={EXAMPLE_OPERATOR} "
+            f"Name=email_verified,Value=true\n"
             f"  aws cognito-idp admin-set-user-password --user-pool-id {api['OperatorPoolId']} \\\n"
-            "      --username you@example.com --password '<12+ chars>' --permanent\n"
+            f"      --username {EXAMPLE_OPERATOR} --password '<12+ chars>' --permanent\n"
             f"  aws cognito-idp admin-add-user-to-group --user-pool-id {api['OperatorPoolId']} \\\n"
-            "      --username you@example.com --group-name asdp-approvers\n\n"
+            f"      --username {EXAMPLE_OPERATOR} --group-name asdp-approvers\n\n"
             "then set PII_ERASURE_OPERATOR_USER and PII_ERASURE_OPERATOR_PASSWORD.\n"
             "A T3 plan (holds, crypto-shred, or residual risk) also needs asdp-legal."
         )
