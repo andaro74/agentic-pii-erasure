@@ -262,6 +262,10 @@ evals/
 tests/
 ├── unit/           contract, canonicalisation, digest binding, policies, reducers,
 │                   participant handler logic (moto), synth/IAM assertions   [hermetic]
+│                   …and the docs themselves: `test_adr_index.py` (no ADR missing
+│                   from an index that claims to be complete) and `test_doc_links.py`
+│                   (every relative link and heading anchor resolves). Neither
+│                   breaks anything that runs, which is why they need a gate.
 ├── fixtures/
 │   └── canonical/  golden canonical bytes + sha256 per input, carrying the
 │                   canonicalisation schemaVersion. Changing a rule turns these

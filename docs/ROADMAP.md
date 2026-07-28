@@ -186,7 +186,11 @@ There is no local mode ([ADR-017](adr/ADR-017-real-aws-participants.md)), so fro
 > **Hermetic half landed 2026-07-27.** The discovery subgraph, the five agents, the
 > Runtime HTTP contract, `infra/stacks/runtime.py`, Memory priors with the rejecting
 > scrubber, `evals/run.py` + nine evaluators, and the adversarial corpus.
-> `make check`: **957 passed**, mypy clean on 93 files.
+> `discovery/advisor.py` then wired the one model in the platform: its only channel is a
+> scope-hint list, a hint can only *widen* a probe, and every failure path degrades to
+> silence — so a model outage costs depth and never recall, and `make check` still needs
+> no Bedrock. `make check`: **1330 passed**, mypy clean on 94 files — a count that now
+> moves with the docs, since `test_doc_links.py` is parameterised per link (V10-9).
 >
 > **The research changed the artifact.** `CreateAgentRuntime` now accepts a
 > `codeConfiguration` — an S3 zip — as well as a container image, and the container
@@ -203,7 +207,7 @@ There is no local mode ([ADR-017](adr/ADR-017-real-aws-participants.md)), so fro
 > Remaining for the tick: `make deploy-dev`, then `make eval` and `make eval-adversarial`.
 
 
-**Build:** `discovery/subgraph.py` + `agents/` (cartographer, prospector, lineage, counsel, editor) · `runtime/entrypoint.py` (the AgentCore Runtime HTTP contract) + container image · `infra/stacks/runtime.py` · AgentCore Memory priors with the pre-write scrubber ([ADR-019](adr/ADR-019-agentcore-memory-priors.md)) · `evals/run.py` and evaluators (recall **hard-fails below 1.0**, precision report-only, hold_detection, trajectory, residual_honesty, no_pii_in_memory, tool_surface_minimality) · the adversarial corpus end to end.
+**Build:** `discovery/subgraph.py` + `agents/` (cartographer, prospector, lineage, counsel, editor) · `runtime/entrypoint.py` (the AgentCore Runtime HTTP contract) + the arm64 code zip `make package` builds ([ADR-025](adr/ADR-025-runtime-ships-a-code-zip.md) — this line said "container image" until the research changed the artifact) · `discovery/advisor.py` (the one model, additive-only) · `infra/stacks/runtime.py` · AgentCore Memory priors with the pre-write scrubber ([ADR-019](adr/ADR-019-agentcore-memory-priors.md)) · `evals/run.py` and evaluators (recall **hard-fails below 1.0**, precision report-only, hold_detection, trajectory, residual_honesty, no_pii_in_memory, tool_surface_minimality) · the adversarial corpus end to end.
 
 **Hermetic done when:** the read-only tool list is asserted at subgraph construction with a unit test behind it · `cdk synth` asserts the Runtime role has no participant IAM.
 

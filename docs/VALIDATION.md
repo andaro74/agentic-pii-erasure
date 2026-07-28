@@ -1146,6 +1146,39 @@ than whichever loop variable survived — a surface that differs between runs me
 per-identity filtering is not deterministic, which is a `GateError` rather than something
 to average.
 
+### 2026-07-27 · V10-9 — a superseding ADR that did not name every document it overrode
+
+| ID | Severity | Finding | Resolution |
+|---|---|---|---|
+| **V10-9** | **Low** | **[ADR-025](adr/ADR-025-runtime-ships-a-code-zip.md) changed the Runtime's artifact from a container to an S3 code zip and enumerated what it superseded — ARCHITECTURE §4 and PROJECT-STRUCTURE's `runtime/Dockerfile` — but missed [ADR-015](adr/ADR-015-serverless-compute-split.md).** ADR-015's "Cost 2 — two deployment artifacts" still promised *"a container image in ECR for the Runtime"*, and its independent-upgrade bullet still spoke of a container image. ROADMAP's own M7 **Build** line still listed "+ container image" for an artifact that was never built. | ADR-025's status line now names ADR-015 explicitly and says which part it overrides (the artifact, not the decision). ADR-015 keeps its original wording struck through with a pointer forward — the same "mark it on the record rather than delete it" convention ARCHITECTURE §16 Q7 uses. ROADMAP's Build line now names the code zip and says what it used to say. |
+
+**The rule this yields:** a superseding ADR must enumerate *every* document carrying the
+claim it replaces, and other ADRs are the ones most likely to be missed — the search
+naturally goes to ARCHITECTURE and PROJECT-STRUCTURE because those are the documents that
+*describe* the system, while the ADR set is where the old claim was *argued for*, which is
+worse.
+
+**`tests/unit/test_doc_links.py` is the guard, and it would not have caught this** — which
+is why it is worth being precise about what it does. ADR-015's link to nothing was fine;
+its *sentence* was wrong. No test detects a stale claim behind a working link. What the
+new test automates is the mechanical half of the validation discipline's sweep item 3
+(previously run by hand, when someone remembered): every relative link in every markdown
+file outside the vendored build output resolves to a real file, and every `#anchor`
+resolves to a real heading, checked against GitHub's slug rules. **315 links across 37
+files**, all green, and a deliberately-broken link and a deliberately-broken anchor were
+both confirmed to fail it before it was committed.
+
+Stated honestly: exactly **one** of those 315 links carries an anchor, so the anchor half
+is near-vacuous on today's corpus. It stays because a heading rename leaves an anchored
+link looking fine in a diff, and the slug rule is pinned by its own test rather than by
+whichever links happen to exist — the alternative is a check whose coverage silently
+depends on the corpus, which is the shape V10-8 was.
+
+The slugifier substitutes **one hyphen per space, not per run**, matching
+`github-slugger`. This repo's headings are full of em dashes, and an em dash slugifies to
+a *double* hyphen — collapsing runs would have been tidier and would have quietly blessed
+links that GitHub 404s.
+
 1. Read a doc claim as an adversary: *what would make this false, and could the
    named control detect it?*
 2. If the control can't go red, that's a finding — record it here with the fix and

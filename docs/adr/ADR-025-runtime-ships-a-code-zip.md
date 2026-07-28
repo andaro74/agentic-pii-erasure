@@ -1,6 +1,6 @@
 # ADR-025: The discovery Runtime ships as an S3 code zip, not a container image
 
-- **Status:** Accepted — supersedes the container decision implied by ARCHITECTURE §4 and `runtime/Dockerfile` in PROJECT-STRUCTURE.md
+- **Status:** Accepted — supersedes the container decision implied by ARCHITECTURE §4, `runtime/Dockerfile` in PROJECT-STRUCTURE.md, and [ADR-015](ADR-015-serverless-compute-split.md)'s "Cost 2 — two deployment artifacts", which named an ECR image. ADR-015's *decision* — Runtime for reasoning, Lambda for the saga — is untouched; only the artifact it ships is.
 - **Anchors invariants:** CLAUDE.md #0 (framework boundary), and the standing cost constraint ("nothing bills continuously for existing")
 - **Baseline:** architecture v0.2 — AWS-native serverless
 
