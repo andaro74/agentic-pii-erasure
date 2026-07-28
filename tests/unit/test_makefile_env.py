@@ -166,3 +166,45 @@ def test_the_sandbox_opt_in_persists_via_dotenv(
 
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == f"[{expected}]"
+
+
+#: Targets that drive the CLI against a **deployed** stack. Written out verbatim, because
+#: the detector above finds AWS targets by looking for `$(CDK) deploy|destroy|bootstrap`
+#: and these invoke boto3 through Python instead — so every M8 operator target was outside
+#: its reach and shipped without `$(LOAD_ENV)`.
+#:
+#: The consequence was not theoretical. `.env` carries PII_ERASURE_OPERATOR_USER and
+#: PII_ERASURE_OPERATOR_PASSWORD, and approval deliberately has no bypass, so an operator
+#: who set them correctly would have been told they had set nothing — the exact inertness
+#: the LOAD_ENV comment block was written about, re-earned on the targets added last.
+_DEPLOYED_CLI_TARGETS = (
+    "seed",
+    "discover",
+    "walkthrough",
+    "threads",
+    "approve",
+    "resume",
+    "ledger",
+)
+
+
+@pytest.mark.parametrize("target", _DEPLOYED_CLI_TARGETS)
+def test_every_deployed_cli_target_loads_env(target: str) -> None:
+    body = _recipes()[target]
+    assert "$(LOAD_ENV)" in body, (
+        f"{target} runs against a deployed stack but ignores .env — every variable an "
+        f"operator sets there is inert for it"
+    )
+    assert "$(REQUIRE_REGION)" in body, f"{target} reaches AWS without demanding a region"
+
+
+def test_inspect_stays_offline() -> None:
+    """The counter-case, so the rule above is a rule and not "add LOAD_ENV everywhere".
+
+    `inspect` reads the generated ground-truth map and never asks a participant — that
+    separation is what keeps `discover` the only command whose answer comes from the
+    system under test (ADR-020).
+    """
+    body = _recipes()["inspect"]
+    assert "$(LOAD_ENV)" not in body
+    assert "$(REQUIRE_REGION)" not in body

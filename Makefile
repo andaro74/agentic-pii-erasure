@@ -310,27 +310,31 @@ inspect: ## Dump one participant's state. Usage: make inspect P=compliance-archi
 # ─── Running — DEPLOYED ───────────────────────────────────────────────────────
 .PHONY: walkthrough
 walkthrough: ## Full arc against the dev stack: discover → soft → pause → hard → cert (M8)
-	$(PY) -m pii_erasure.cli.main walkthrough
+	@# .env carries PII_ERASURE_OPERATOR_USER/PASSWORD, and approval has no bypass — so
+	@# without LOAD_ENV an operator who set them correctly is told they set nothing. This
+	@# is the same inertness the LOAD_ENV comment above describes; the M8 targets were
+	@# written without it and would have re-earned that finding on the deployed gate.
+	@$(LOAD_ENV); 	$(REQUIRE_REGION); 	$(PY) -m pii_erasure.cli.main walkthrough
 
 .PHONY: discover
 discover: ## Discover one subject. Usage: make discover SUBJECT=sub_7f3a (M7)
-	$(PY) -m pii_erasure.cli.main discover --subject $(SUBJECT)
+	@$(LOAD_ENV); 	$(REQUIRE_REGION); 	$(PY) -m pii_erasure.cli.main discover --subject $(SUBJECT)
 
 .PHONY: threads
 threads: ## List checkpoint threads and their paused state — nothing is running (M8)
-	$(PY) -m pii_erasure.cli.main threads --list
+	@$(LOAD_ENV); 	$(REQUIRE_REGION); 	$(PY) -m pii_erasure.cli.main threads --list
 
 .PHONY: approve
 approve: ## Approve or deny. Usage: make approve THREAD=saga_01JQ8 DECISION=approve (M8)
-	$(PY) -m pii_erasure.cli.main approve --thread $(THREAD) --decision $(DECISION)
+	@$(LOAD_ENV); 	$(REQUIRE_REGION); 	$(PY) -m pii_erasure.cli.main approve --thread $(THREAD) --decision $(DECISION)
 
 .PHONY: resume
 resume: ## Manually resume a paused saga. Usage: make resume THREAD=saga_01JQ8 (M8)
-	$(PY) -m pii_erasure.cli.main resume --thread $(THREAD)
+	@$(LOAD_ENV); 	$(REQUIRE_REGION); 	$(PY) -m pii_erasure.cli.main resume --thread $(THREAD)
 
 .PHONY: ledger
 ledger: ## Print the hash-chained audit ledger and verify the chain (M5)
-	$(PY) -m pii_erasure.cli.main ledger --verify
+	@$(LOAD_ENV); 	$(REQUIRE_REGION); 	$(PY) -m pii_erasure.cli.main ledger --verify
 
 # ─── Gates — DEPLOYED ─────────────────────────────────────────────────────────
 .PHONY: conformance

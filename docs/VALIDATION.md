@@ -1203,6 +1203,18 @@ promised since M0 ("Compress via this parameter only — never by bypassing the 
 Defaults equal the previous hard-coded constants, so an unset environment deploys the
 behaviour that was already deployed.
 
+### 2026-07-28 · V11-2 — the six new targets ignored the file they told you to edit
+
+| ID | Severity | Finding | Resolution |
+|---|---|---|---|
+| **V11-2** | **High** | **None of M8's operator targets loaded `.env`.** `walkthrough`, `discover`, `threads`, `approve`, `resume` and `ledger` invoked the CLI without `$(LOAD_ENV)` or `$(REQUIRE_REGION)`. `.env` carries `PII_ERASURE_OPERATOR_USER` and `PII_ERASURE_OPERATOR_PASSWORD`, and approval deliberately has **no bypass** — so an operator who set them correctly would have been told, loudly and with instructions, that they had set nothing. `AWS_REGION` and `PII_ERASURE_STAGE` were equally inert, so the commands would also have run against whatever region the ambient profile named. | All six now carry both guards. `tests/unit/test_makefile_env.py` gains a verbatim list of deployed CLI targets; removing the fix from `walkthrough` fails it, confirmed before commit. `inspect` is asserted to stay *without* them, so the rule stays a rule rather than "add LOAD_ENV everywhere". |
+
+**Why the existing test did not catch it.** `test_every_aws_target_loads_env_and_requires_a_region` finds AWS targets by matching `$(CDK) deploy|destroy|bootstrap` in the recipe. That was the right detector when every AWS-touching target was a CDK invocation. M8's targets reach AWS through **boto3 inside Python**, so they were outside the detector's reach — not exempted, just invisible to it.
+
+That is the same shape as [V11-1](#2026-07-28--v11-1--the-only-path-that-needed-the-variable-never-exercised-it), found in the same hour: **a guard whose coverage is defined by a pattern silently stops covering the code that stops matching the pattern.** V11-1's guard was a DI seam that skipped the wiring; this one was a regex that skipped a new invocation style. Both were caught by asking "what does this control actually enumerate?" rather than by trusting that a control exists.
+
+The Makefile's own `LOAD_ENV` comment block already describes this failure — *"make does not read `.env`, so every variable in it used to be inert"* — which makes this a finding the repo had written down and then re-earned on the targets added last. Recording a constraint is not the same as extending it to new code, which is [V10-5](#2026-07-27--v10-5--the-cache-strip-that-named-two-of-three-assets)'s lesson and V10-8's.
+
 1. Read a doc claim as an adversary: *what would make this false, and could the
    named control detect it?*
 2. If the control can't go red, that's a finding — record it here with the fix and
