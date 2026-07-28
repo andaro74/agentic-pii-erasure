@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import time
 import uuid
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -75,10 +76,45 @@ def seeded_subject() -> str:
     placed = {ref: systems for ref, systems in subjects.items() if systems}
     if not placed:
         raise OperationError(f"{GROUND_TRUTH} records no placed artifacts — re-run `make seed`.")
-    # The subject touching the MOST systems: a walkthrough that exercises one participant
-    # proves less than one that exercises seven, and phase 3's per-participant loop is
-    # where ordering and residual honesty actually show up.
-    return str(max(placed, key=lambda ref: len(placed[ref])))
+
+    # Skip anyone already erased. The gate's word is "twice", and this function was
+    # deterministic — `max()` over the same map returns the same subject — so the second
+    # run would have targeted the subject the first run had just erased. Discovery would
+    # find nothing, and `intake` would refuse on the tombstone before that. Neither is a
+    # bug in the platform; both would look like one.
+    #
+    # The tombstone registry is the right source because it is the system's OWN record of
+    # "this subject has been erased" — the same registry `intake` consults to refuse a
+    # resurrection. Tracking used subjects in a file beside the walkthrough would be a
+    # second source of truth that drifts the first time someone tears down a stack.
+    erased = _tombstoned(placed)
+    remaining = {ref: systems for ref, systems in placed.items() if ref not in erased}
+    if not remaining:
+        raise OperationError(
+            f"every seeded subject in {GROUND_TRUTH} has already been erased. Run "
+            f"`make seed` for a fresh set — re-running against a tombstoned subject "
+            f"tests the resurrection guard, not the walkthrough."
+        )
+    # Of those, the one touching the MOST systems: a walkthrough that exercises one
+    # participant proves less than one that exercises seven, and phase 3's
+    # per-participant loop is where ordering and residual honesty actually show up.
+    return str(max(remaining, key=lambda ref: len(remaining[ref])))
+
+
+def _tombstoned(subject_refs: Iterable[str]) -> set[str]:
+    """Which of these the registry already holds. One stack read, then one lookup each.
+
+    A read failure propagates rather than defaulting: assuming "not tombstoned" would
+    send the walkthrough at an erased subject, and assuming "tombstoned" would skip every
+    candidate and claim the fixtures were exhausted. Both are confident wrong answers.
+    """
+    import boto3
+
+    from pii_erasure.saga.tombstone import TombstoneRegistry
+
+    table = operations.outputs("foundation")["TombstonesTable"]
+    registry = TombstoneRegistry(table, client=boto3.client("dynamodb"))
+    return {ref for ref in subject_refs if registry.is_tombstoned(ref)}
 
 
 def run(*, subject: str | None = None, tenant: str = "default") -> int:

@@ -108,6 +108,7 @@ def test_the_subject_comes_from_the_generated_map(
         encoding="utf-8",
     )
     monkeypatch.setattr(walkthrough, "GROUND_TRUTH", truth)
+    monkeypatch.setattr(walkthrough, "_tombstoned", lambda refs: set())
     assert walkthrough.seeded_subject() == "sub_rich"
 
 
@@ -125,6 +126,7 @@ def test_a_map_with_no_placements_is_refused(
     truth = tmp_path / "ground-truth.json"
     truth.write_text(json.dumps({"subjects": {"sub_a": {}}}), encoding="utf-8")
     monkeypatch.setattr(walkthrough, "GROUND_TRUTH", truth)
+    monkeypatch.setattr(walkthrough, "_tombstoned", lambda refs: set())
     with pytest.raises(OperationError, match="no placed artifacts"):
         walkthrough.seeded_subject()
 
@@ -140,3 +142,59 @@ def test_an_explicit_subject_is_honoured(monkeypatch: pytest.MonkeyPatch) -> Non
     monkeypatch.setattr(walkthrough, "_arc", fake_arc)
     assert walkthrough.run(subject="sub_chosen") == 0
     assert captured["subject"] == "sub_chosen"
+
+
+# ─── the second run must not target the first run's subject ───────────────────────────
+
+
+def _map(tmp_path: Path, subjects: dict[str, dict[str, Any]]) -> Path:
+    truth = tmp_path / "ground-truth.json"
+    truth.write_text(json.dumps({"subjects": subjects}), encoding="utf-8")
+    return truth
+
+
+def test_an_already_erased_subject_is_skipped(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """M8's gate is "twice, identically", and this function is deterministic — `max()`
+    over the same map returns the same subject. So the second run would have targeted
+    the subject the first run had just erased: discovery finds nothing, and `intake`
+    refuses on the tombstone before that. Neither is a platform bug; both look like one.
+    """
+    monkeypatch.setattr(
+        walkthrough,
+        "GROUND_TRUTH",
+        _map(
+            tmp_path,
+            {
+                "sub_erased": {"a": {}, "b": {}, "c": {}},
+                "sub_fresh": {"a": {}, "b": {}},
+            },
+        ),
+    )
+    monkeypatch.setattr(walkthrough, "_tombstoned", lambda refs: {"sub_erased"})
+    assert walkthrough.seeded_subject() == "sub_fresh"
+
+
+def test_exhausted_fixtures_say_to_reseed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Re-running against a tombstoned subject tests the resurrection guard, not the
+    walkthrough — so the message must send the operator to `make seed`, not leave them
+    reading a phase-2 failure."""
+    monkeypatch.setattr(walkthrough, "GROUND_TRUTH", _map(tmp_path, {"sub_a": {"a": {}}}))
+    monkeypatch.setattr(walkthrough, "_tombstoned", lambda refs: set(refs))
+    with pytest.raises(OperationError, match="make seed"):
+        walkthrough.seeded_subject()
+
+
+def test_the_richest_remaining_subject_wins(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Breadth still matters among the survivors: phase 3's per-participant loop is where
+    ordering and residual honesty actually show up."""
+    monkeypatch.setattr(
+        walkthrough,
+        "GROUND_TRUTH",
+        _map(tmp_path, {"sub_one": {"a": {}}, "sub_many": {"a": {}, "b": {}, "c": {}}}),
+    )
+    monkeypatch.setattr(walkthrough, "_tombstoned", lambda refs: set())
+    assert walkthrough.seeded_subject() == "sub_many"

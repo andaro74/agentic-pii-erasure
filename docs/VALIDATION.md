@@ -1268,6 +1268,16 @@ V11-4c deserves one more line. It is the fourth "a gate that cannot gate" in thi
 
 It was enforced by test — for `subject_ref`. Digests and ARNs are the same class of value and were never added. That is the fourth instance of this exact pattern ([V10-5](#2026-07-27--v10-5--the-cache-strip-that-named-two-of-three-assets), [V10-8](#2026-07-27--v10-8--the-harness-tried-to-borrow-the-identity-it-was-measuring), [V11-3](#2026-07-28--v11-3--a-saga-behind-an-http-request-and-a-comment-that-said-so), now this): **a rule stated in prose, enforced for the one case that prompted it, and never extended to the class it describes.** The check that would have caught all four is the same question — *what else is in this category?* — asked at the moment the rule is written rather than at the moment it breaks.
 
+### 2026-07-28 · V11-7 — "twice" would have failed on the second run
+
+| ID | Severity | Finding | Resolution |
+|---|---|---|---|
+| **V11-7** | **Medium** | **`seeded_subject()` was deterministic**, returning `max()` over the same ground-truth map — the same subject every time. M8's gate is *"cleanly, twice, identically"*, so the second run would have targeted the subject the first run had just **erased**: `intake` refuses on the tombstone, and had it not, discovery would find nothing. Caught by reading the gate's wording after run 1 passed, before run 2 was attempted. | The choice now skips subjects the **tombstone registry** already holds — the system's own record of "erased", and the same registry `intake` consults to refuse a resurrection. Exhausted fixtures say "run `make seed`" rather than leaving an operator to read a phase-2 failure. |
+
+**Neither failure would have been a platform bug, and both would have looked like one.** A tombstone refusal on run 2 is the resurrection guard working exactly as designed; an operator seeing it mid-gate would reasonably start debugging the guard. The fixture, not the platform, was wrong.
+
+The alternative — a file recording which subjects the walkthrough had used — was rejected: it is a second source of truth for a fact the tombstone registry already holds authoritatively, and it would drift the first time someone ran `make destroy-dev` without deleting it.
+
 1. Read a doc claim as an adversary: *what would make this false, and could the
    named control detect it?*
 2. If the control can't go red, that's a finding — record it here with the fix and
