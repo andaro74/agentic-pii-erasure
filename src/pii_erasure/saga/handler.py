@@ -123,7 +123,69 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         result = graph.invoke(Command(resume=resume_value), config, durability="sync")
         return _summary(thread_id, result)
 
+    if action == "describe":
+        return _describe(graph, str(event["thread_id"]))
+
+    if action == "threads":
+        return _threads(graph, limit=int(event.get("limit", 50)))
+
     raise SagaRequestError(f"unknown action {action!r}")
+
+
+def _describe(graph: Any, thread_id: str) -> dict[str, Any]:
+    """One thread, read-only — what it is waiting for and the plan it is waiting on.
+
+    Read-only is the load-bearing word. The approval API (M8) needs the manifest and the
+    pending gate to render a review, and it must obtain them **without** delivering a
+    resume: LangGraph persists a resume value against the pending interrupt before the
+    node consumes it, so a "read" implemented as a no-op resume would wedge the thread it
+    was inspecting (V9-3, the same trap the resume path guards).
+
+    It also carries the digest the approver must echo back. The API compares them before
+    minting anything, which is invariant 3 enforced one layer earlier than the node — not
+    instead of it. `nodes/approval_gate.py` still checks, because a caller that skips the
+    API must still fail.
+    """
+    state = graph.get_state(_config(thread_id))
+    if not state.values:
+        return {"thread_id": thread_id, "status": "unknown"}
+    interrupts = state.interrupts
+    payload = (interrupts[0].value or {}) if interrupts else {}
+    return {
+        "thread_id": thread_id,
+        "status": "paused" if interrupts else str(state.values.get("status", "running")),
+        "gate": payload.get("gate"),
+        "interrupt": payload,
+        "subject_ref": state.values.get("subject_ref"),
+        "tenant_id": state.values.get("tenant_id"),
+        "manifest": state.values.get("manifest"),
+        "manifest_digest": state.values.get("manifest_digest"),
+    }
+
+
+def _threads(graph: Any, *, limit: int) -> dict[str, Any]:
+    """Every thread the checkpointer knows, newest checkpoint per thread.
+
+    The checkpointer is the only source consulted — deliberately. A separate index of
+    live sagas would be a second place saga state lives, and reconciling the two is
+    exactly the divergence ADR-016 removed. The cost is that this walks checkpoints
+    rather than querying an index, so it is an operator command and not a hot path;
+    `limit` bounds it and the response says whether it truncated.
+    """
+    seen: dict[str, dict[str, Any]] = {}
+    truncated = False
+    for tuple_ in graph.checkpointer.list(None, limit=limit * 20):
+        thread_id = str(tuple_.config.get("configurable", {}).get("thread_id", ""))
+        if not thread_id or thread_id in seen:
+            continue
+        if len(seen) >= limit:
+            truncated = True
+            break
+        seen[thread_id] = _describe(graph, thread_id)
+    return {
+        "threads": sorted(seen.values(), key=lambda t: str(t["thread_id"])),
+        "truncated": truncated,
+    }
 
 
 def _summary(thread_id: str, result: dict[str, Any]) -> dict[str, Any]:

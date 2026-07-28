@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 
 from aws_cdk import App
+from stacks.api import ApiStack
 from stacks.foundation import FoundationStack
 from stacks.gateway import GatewayStack
 from stacks.participants import ParticipantsStack
@@ -78,7 +79,7 @@ runtime = RuntimeStack(
     model_id=os.environ.get("PII_ERASURE_MODEL_ID", ""),
 )
 
-SagaStack(
+saga = SagaStack(
     app,
     f"asdp-{stage}-saga",
     stage=stage,
@@ -93,6 +94,16 @@ SagaStack(
     # this Runtime and receives a manifest. Passed as an exact ARN rather than a
     # pattern, which is why the runtime stack is constructed first.
     discovery_runtime_arn=runtime.runtime.attr_agent_runtime_arn,
+)
+
+# The operator front door (M8). It receives the executor function and nothing else —
+# the API validates and delegates; it holds no graph, no checkpointer, no participant.
+ApiStack(
+    app,
+    f"asdp-{stage}-api",
+    stage=stage,
+    saga_executor=saga.executor_fn,
+    prod=stage == "prod",
 )
 
 app.synth()
