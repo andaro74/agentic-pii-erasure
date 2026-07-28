@@ -164,7 +164,7 @@ There is no local mode ([ADR-017](adr/ADR-017-real-aws-participants.md)), so fro
 > approval token is **denied at the Gateway**, participant never invoked.
 
 
-**Build:** `policy/{engine,middleware,context,decisions,gateway}.py` · `policies/cedar/*.cedar` transcribed from ARCHITECTURE §9.2 · AgentCore Policy attachment in `infra/stacks/gateway.py` · deploy-time schema validation of the `.cedar` files against the Gateway's generated schema · `LOG_ONLY` vs `ENFORCING` as a **stack parameter**, not an env var.
+**Build:** `policy/{engine,schema,decisions}.py` — this line said `{engine,middleware,context,decisions,gateway}` and M6 was ticked without `middleware.py`, with no note saying so. [ADR-026](adr/ADR-026-no-middleware-seam.md) settles it: there is no middleware seam, because the model holds no tools. `context` and `gateway` folded into `schema.py` and `decisions.py`. · `policies/cedar/*.cedar` transcribed from ARCHITECTURE §9.2 · AgentCore Policy attachment in `infra/stacks/gateway.py` · deploy-time schema validation of the `.cedar` files against the Gateway's generated schema · `LOG_ONLY` vs `ENFORCING` as a **stack parameter**, not an env var.
 
 **Hermetic done when:** `make policy-test` green — the Cedar files parse and evaluate, and the engine/Cedar divergence test passes.
 
@@ -181,7 +181,7 @@ There is no local mode ([ADR-017](adr/ADR-017-real-aws-participants.md)), so fro
 
 **Traps:** default-deny, forbid-wins · the engine and the Cedar files express identical rules against two backends — one divergence test between them · **entity and context names are validated against the generated schema, never assumed** ([ADR-018](adr/ADR-018-agentcore-policy.md)); a policy referencing a context key the Gateway does not inject is a policy that silently never fires · the decisions log feeds M7's adversarial eval.
 
-## - [ ] M7 · Discovery on AgentCore Runtime + the recall gate
+## - [x] M7 · Discovery on AgentCore Runtime + the recall gate
 
 > **Hermetic half landed 2026-07-27.** The discovery subgraph, the five agents, the
 > Runtime HTTP contract, `infra/stacks/runtime.py`, Memory priors with the rejecting
@@ -204,7 +204,18 @@ There is no local mode ([ADR-017](adr/ADR-017-real-aws-participants.md)), so fro
 > of the graph rather than of the model. That is also what makes the adversarial gate
 > winnable without grading the model's disposition (§11.4).
 >
-> Remaining for the tick: `make deploy-dev`, then `make eval` and `make eval-adversarial`.
+> **Deployed gate run 2026-07-28.** `make eval` → **`✅ eval PASSED`**, which is printed
+> only when every block survives: recall at `threshold=1.0` on **both** the cold and warm
+> prior passes, plus precision, `hold_detection`, `manifest_completeness`,
+> `no_premature_hard_delete`, `ordering_conformance`, `residual_honesty`, and the
+> cross-cutting `tool_surface_minimality` and `no_pii_in_memory`. `make eval-adversarial`
+> → **`✅ adversarial PASSED`**.
+>
+> **What that settles, and what it doesn't.** Recall 1.0 against eight real services is
+> the gate ADR-008 exists for, and V5-1's open question — whether tool-selection accuracy
+> degrades at eight participants behind one Gateway — now has evidence rather than a
+> worry: it did not. What the run does *not* establish is behaviour at 80 participants,
+> and the O(1) tool surface is the reason to expect it to hold, not a measurement of it.
 
 
 **Build:** `discovery/subgraph.py` + `agents/` (cartographer, prospector, lineage, counsel, editor) · `runtime/entrypoint.py` (the AgentCore Runtime HTTP contract) + the arm64 code zip `make package` builds ([ADR-025](adr/ADR-025-runtime-ships-a-code-zip.md) — this line said "container image" until the research changed the artifact) · `discovery/advisor.py` (the one model, additive-only) · `infra/stacks/runtime.py` · AgentCore Memory priors with the pre-write scrubber ([ADR-019](adr/ADR-019-agentcore-memory-priors.md)) · `evals/run.py` and evaluators (recall **hard-fails below 1.0**, precision report-only, hold_detection, trajectory, residual_honesty, no_pii_in_memory, tool_surface_minimality) · the adversarial corpus end to end.
@@ -218,6 +229,13 @@ There is no local mode ([ADR-017](adr/ADR-017-real-aws-participants.md)), so fro
 ## - [ ] M8 · The operator surface and the deployed walkthrough
 
 **Build:** `approval/presenter.py` (anomaly-first: baseline diff and residual risk **first**, never a 400-row inventory) · `approval/api.py` and `infra/stacks/api.py` (Cognito-authenticated HTTP API for intake, approval, and operator reads) · CLI: `discover`, `walkthrough`, `threads`, `resume`, `approve`, `ledger`.
+
+**Hermetic done when:** `make check` green with — the presenter puts **baseline diff and residual risk before any inventory row**, asserted by a test that fails on the reverse ordering (the trap below is that the presenter is a control, so "it renders" is not the property) · an approval request whose `manifest_digest` does not match the manifest is rejected **before a token is minted**, never after (invariant 3) · `cdk synth` asserts every route on the HTTP API carries the Cognito authorizer, since one unauthenticated approval route is the entire HITL control gone · each new CLI command exists and exits non-zero while unbuilt, per M0's convention.
+
+> This gate was **missing** until M7 closed — M8 listed only a deployed gate, against the
+> two-gate rule stated at the top of this file. Written now rather than at the first
+> commit of M8, because a gate authored alongside the code it grades tends to grade what
+> the code happens to do.
 
 **Deployed done when:** `make walkthrough` runs the full arc against the dev stack — discover → soft delete → pause → *the executor Lambda returns and nothing is held* → `make threads` → `make approve` → grace → hard delete → certificate — cleanly, twice, identically.
 

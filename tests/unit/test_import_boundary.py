@@ -1,7 +1,7 @@
 """The framework boundary is an explicit allowlist — CLAUDE.md invariant 0.
 
-The point is not purity. Interrupts, middleware and resume genuinely need the framework,
-and pretending otherwise would produce a worse system. The point is that `contract/`,
+The point is not purity. Interrupts and resume genuinely need the framework, and
+pretending otherwise would produce a worse system. The point is that `contract/`,
 `manifest/`, `participants/`, `ledger/` and the policy *engine* stay framework-free,
 because that is what made two framework migrations (ADR-009 → 011 → 013) touch almost
 nothing. Widening the list below is an architectural decision, not a convenience import.
@@ -29,7 +29,11 @@ FRAMEWORK_ALLOWLIST: tuple[str, ...] = (
     "discovery/",
     "runtime/",
     "saga/",
-    "policy/middleware.py",
+    # `policy/middleware.py` was here until ADR-026. LangChain middleware wraps an
+    # *agent's* tool calls, and the one model in this platform holds no tools — so the
+    # seam never existed and the file was never built. An allowlist entry for a file
+    # that will not exist is decoration; removing it narrows the boundary, and widening
+    # it back is an architectural decision, which is the whole point of invariant 0.
     "approval/gate.py",
     "scheduler/handler.py",
 )

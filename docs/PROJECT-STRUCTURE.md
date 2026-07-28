@@ -2,7 +2,7 @@
 
 Annotated layout for `agentic-pii-erasure`. Companion to [ARCHITECTURE.md](ARCHITECTURE.md), which explains *why*; this file explains *where*.
 
-Stack: **Amazon Bedrock AgentCore** (Runtime, Gateway, Policy, Identity, Memory, Observability) · **LangGraph + LangChain 1.0** (graphs, agents, middleware) · **AWS Lambda** (the saga) · **DynamoDB** (checkpoints, ledger, registries) · **EventBridge Scheduler** (timers) · **KMS**, **S3 Object Lock**, **S3 Vectors**, **Cognito**, **Aurora Serverless v2**, **Glue/Athena**, **SES** (the participants).
+Stack: **Amazon Bedrock AgentCore** (Runtime, Gateway, Policy, Identity, Memory, Observability) · **LangGraph + LangChain 1.0** (graphs, interrupts, the Bedrock model client — no agents, no middleware: ADR-026) · **AWS Lambda** (the saga) · **DynamoDB** (checkpoints, ledger, registries) · **EventBridge Scheduler** (timers) · **KMS**, **S3 Object Lock**, **S3 Vectors**, **Cognito**, **Aurora Serverless v2**, **Glue/Athena**, **SES** (the participants).
 
 **Deploys to AWS only.** There is no local mode — see [ADR-017](adr/ADR-017-real-aws-participants.md).
 
@@ -176,7 +176,8 @@ policy/
 ├── engine.py         evaluates THE DEPLOYED .cedar files in-process — the fast pre-check
 ├── schema.py         reconstructs the Cedar schema from the tool manifest (ADR-018)
 ├── decisions.py      structured allow/deny logging; feeds the adversarial eval
-└── middleware.py     LangChain middleware around every tool call        [lands at M7]
+                   (no middleware.py — ADR-026: LangChain middleware wraps an
+                    agent's tool calls, and the model here holds none)
 ```
 
 Two layers by design, and only one of them is the control. **AgentCore Policy at the Gateway is authoritative** ([ADR-018](adr/ADR-018-agentcore-policy.md)); `engine.py` is a fast in-process pre-check and a test surface, because in-process enforcement is bypassable by any caller that forgets it.
@@ -302,6 +303,6 @@ participants  policy  discovery  scheduler
                      approval → saga
 ```
 
-`contract/` depends on nothing. Framework imports are confined to an **explicit allowlist** — `discovery/`, `runtime/`, `saga/`, `policy/middleware.py`, `approval/gate.py`, `scheduler/handler.py` — enforced by a unit test that names the list verbatim. Everything else (`contract/`, `manifest/`, `participants/`, `ledger/`, the policy *engine*) is framework-free, which is what kept the framework migrations cheap and what would keep a fourth one cheap.
+`contract/` depends on nothing. Framework imports are confined to an **explicit allowlist** — `discovery/`, `runtime/`, `saga/`, `approval/gate.py`, `scheduler/handler.py` — enforced by a unit test that names the list verbatim. It lost an entry at [ADR-026](adr/ADR-026-no-middleware-seam.md) rather than gaining one. Everything else (`contract/`, `manifest/`, `participants/`, `ledger/`, the policy *engine*) is framework-free, which is what kept the framework migrations cheap and what would keep a fourth one cheap.
 
 Cloud SDK imports are not boundaried the same way — this is an AWS-only platform and pretending otherwise would be theatre. But `contract/` and `manifest/models.py` stay `boto3`-free, because they are the two files a reader should be able to lift wholesale.

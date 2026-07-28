@@ -1012,6 +1012,7 @@ infra/stacks/  policies/cedar/  evals/  tests/{unit,conformance,integration}  do
 | 023 | Aurora needs a VPC; the platform still never enters one | No VPC-less Aurora exists; the enforceable property is that nothing we run attaches to one, and the VPC holds nothing that bills | Drop the RELATIONAL archetype; Aurora DSQL; leave the claim uncorrected |
 | 024 | Cedar expresses identity and request shape, not business state | The generated schema exposes `context.input` only; six of §9.2's policies could never fire | Keep policies that validate against nothing; inject the facts as tool arguments the caller asserts |
 | 025 | The discovery Runtime ships as an S3 code zip, not a container | `cdk synth` runs in `make check`; a `DockerImageAsset` builds at synth time and would put a Docker daemon + arm64 emulation inside the hermetic gate | Container in ECR (also an image-storage floor); `@app.entrypoint` from the AgentCore SDK |
+| 026 | There is no middleware seam, because the model holds no tools | LangChain middleware wraps an agent's tool calls; the model here holds none, so the interception point never existed — the Gateway, the fixed tool list and invariant 1 close the gap instead | Build it unused; defer again; give the advisor tools and police them |
 
 ---
 

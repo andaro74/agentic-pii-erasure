@@ -8,7 +8,7 @@ A reference implementation of agentic, auditable PII erasure across eight **real
 
 **This platform deploys to AWS. There is no local mode.** No stub model, no SQLite checkpointer, no in-process participants, no `demo-offline`. `make deploy-dev` is the entry point. See [ADR-017](docs/adr/ADR-017-real-aws-participants.md).
 
-Stack: **Amazon Bedrock AgentCore** (Runtime, Gateway, Policy, Identity, Memory, Observability) · **LangGraph + LangChain 1.0** (graphs, agents, middleware) · **Lambda** (the saga) · **DynamoDB** (checkpoints, ledger, registries) · **EventBridge Scheduler** (timers) · **KMS**, **S3 Object Lock**, **S3 Vectors**, **Cognito**, **Aurora Serverless v2**, **Glue/Athena**, **SES** (the participants). **No Step Functions, no Fargate, and nothing we run attached to a VPC** — see ADRs 015–017 and [ADR-023](docs/adr/ADR-023-aurora-needs-a-vpc.md), which records why Aurora forces a VPC to *exist* and why no Lambda joins it.
+Stack: **Amazon Bedrock AgentCore** (Runtime, Gateway, Policy, Identity, Memory, Observability) · **LangGraph + LangChain 1.0** (graphs, interrupts, the Bedrock model client — no agents, no middleware: ADR-026) · **Lambda** (the saga) · **DynamoDB** (checkpoints, ledger, registries) · **EventBridge Scheduler** (timers) · **KMS**, **S3 Object Lock**, **S3 Vectors**, **Cognito**, **Aurora Serverless v2**, **Glue/Athena**, **SES** (the participants). **No Step Functions, no Fargate, and nothing we run attached to a VPC** — see ADRs 015–017 and [ADR-023](docs/adr/ADR-023-aurora-needs-a-vpc.md), which records why Aurora forces a VPC to *exist* and why no Lambda joins it.
 
 **Nothing in the stack bills continuously for existing rather than for working.** That is a hard constraint, not a nice-to-have: it is why the derived-index participant is S3 Vectors and not OpenSearch Serverless ([ADR-021](docs/adr/ADR-021-s3-vectors-for-cost.md)). Before adding any AWS service, check whether it has a provisioned floor — if it does, it needs an ADR arguing why the floor is worth it.
 
@@ -42,9 +42,11 @@ These are not style preferences. Each one exists because violating it produces a
 
 ### 0. The framework boundary is an explicit allowlist
 
-`langgraph` and `langchain` may be imported **only** from: `discovery/`, `runtime/`, `saga/`, `policy/middleware.py`, `approval/gate.py`, and `scheduler/handler.py`. A unit test enforces this list verbatim.
+`langgraph` and `langchain` may be imported **only** from: `discovery/`, `runtime/`, `saga/`, `approval/gate.py`, and `scheduler/handler.py`. A unit test enforces this list verbatim.
 
-The point is not purity — interrupts, middleware and resume genuinely need the framework. The point is that `contract/`, `manifest/`, `participants/`, `ledger/` and the policy *engine* stay framework-free, because that is what made two framework migrations (ADR-009 → 011 → 013) touch almost nothing. Widening the allowlist is an architectural decision, not a convenience import.
+`policy/middleware.py` was on this list until [ADR-026](docs/adr/ADR-026-no-middleware-seam.md) removed it. LangChain middleware intercepts an *agent's* tool calls; the one model here holds no tools, so there was never a seam to attach to and the file was never built. The list narrows — it does not widen to accommodate a file nobody wrote.
+
+The point is not purity — interrupts and resume genuinely need the framework. The point is that `contract/`, `manifest/`, `participants/`, `ledger/` and the policy *engine* stay framework-free, because that is what made two framework migrations (ADR-009 → 011 → 013) touch almost nothing. Widening the allowlist is an architectural decision, not a convenience import.
 
 `boto3` is not boundaried the same way — this is an AWS-only platform and pretending otherwise would be theatre. But `contract/` and `manifest/models.py` stay `boto3`-free, because they are the two files a reader should be able to lift wholesale.
 
@@ -147,7 +149,8 @@ src/pii_erasure/
     handler.py    Lambda entrypoint — drives the graph to the next interrupt or END
     checkpointer.py  DynamoDBSaver + S3 offload
   scheduler/      EventBridge Scheduler + resume Lambda. (Invariant 11)
-  policy/         LangChain middleware, in-process engine, AgentCore Policy client
+  policy/         in-process engine + schema + decisions — the divergence surface for
+                  `make policy-test`. No middleware: ADR-026
   approval/       interrupt()/Command(resume=…), token minting, digest binding, HTTP API
   ledger/         hash-chained append-only audit log → S3 Object Lock
   observability/  structlog + OTel setup, PII redaction
@@ -200,7 +203,7 @@ make destroy-dev    # tear it down. Do this.
 
 ## LangGraph specifics
 
-- `StateGraph`, `interrupt`, `Command` from `langgraph`; agents and middleware from `langchain`; `ChatBedrockConverse` from `langchain_aws`; the checkpointer is `DynamoDBSaver` from `langgraph-checkpoint-aws`.
+- `StateGraph`, `interrupt`, `Command` from `langgraph`; `ChatBedrockConverse` from `langchain_aws`; the checkpointer is `DynamoDBSaver` from `langgraph-checkpoint-aws`. **No `create_agent` and no middleware** — the discovery subgraph's nodes call the toolset directly and the model holds no tools ([ADR-026](docs/adr/ADR-026-no-middleware-seam.md)).
 - **Verify API surface against the pinned version's docs before writing code.** This ecosystem moves; do not trust remembered signatures.
 - The saga is compiled with a checkpointer. The checkpointer is the system of record — not a cache, not an optimisation. Nothing may hold saga state outside it.
 - The approval gate calls `interrupt()` inside a node and resumes via `Command(resume=…)`. **The Lambda is expected to return while paused.** Do not hold an invocation waiting for a human, and do not treat the pause as a liveness dependency.
