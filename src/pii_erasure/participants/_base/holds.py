@@ -16,16 +16,14 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from pii_erasure.contract import Artifact, Deletability, Hold
+from pii_erasure.contract.holds import blocks
 
+__all__ = ["blocks", "deletability"]
 
-def blocks(holds: Sequence[Hold], locator: str) -> bool:
-    """Does any hold cover `locator`?
-
-    Scope matching is prefix-based, which is how every store here names things
-    hierarchically — `public.orders` covers `public.orders.line_items`, and `sub_a3f9/`
-    covers every object beneath it.
-    """
-    return any(locator == hold.scope or locator.startswith(hold.scope) for hold in holds)
+# `blocks` moved to `contract/holds.py` at ADR-027 and is re-exported here so this
+# module's callers are unchanged. The move is the point: the saga could not import it
+# from `participants/`, so it grew its own answer, and the two disagreed for four
+# milestones — the participant scoping per artifact, the saga vetoing the whole subject.
 
 
 def deletability(

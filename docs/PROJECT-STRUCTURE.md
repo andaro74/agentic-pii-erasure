@@ -39,6 +39,10 @@ Depends on nothing. Everything else depends on it. **Framework- and cloud-indepe
 ```
 contract/
 ├── verbs.py          DiscoverRequest/Response, SoftDeleteRequest/Response, …
+├── holds.py          hold scope matching — ADR-027. Lived in participants/_base/ where
+│                  the saga could not import it, so the saga grew its own answer and the
+│                  two disagreed for four milestones. One rule, in the package everything
+│                  depends on, is what makes that disagreement unrepresentable.
 ├── archetypes.py     Archetype enum: AUTHORITATIVE_IDENTITY, WORM, DERIVED_INDEX, …
 ├── outcomes.py       Outcome: APPLIED | ALREADY_APPLIED | REFUSED | PARTIAL
 │                  Deletability: NOT_PRESENT | DELETABLE | PARTIAL | BLOCKED_BY_HOLD
@@ -298,7 +302,7 @@ Chaos and durability cases worth keeping green:
 - **upgrade canary** → pause, bump both pinned packages, resume cleanly *(release gate, ADR-016)*
 - EventBridge Scheduler fires twice → exactly one resume
 - manifest mutated after approval → Gateway policy denial and security alarm
-- hold appears during the grace window → phase 3 refuses at re-check
+- hold appears during the grace window → phase 3 refuses **for the participants it scopes**, and proceeds for the rest ([ADR-027](adr/ADR-027-holds-block-a-scope-not-a-subject.md))
 - subject reappears at T+7 → resurrection incident, distinct from a deletion failure
 
 ## Dependency direction

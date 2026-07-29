@@ -13,6 +13,12 @@ from pii_erasure.contract.canonical import (
     JSONValue,
     canonical,
 )
+from pii_erasure.contract.holds import (
+    SUBJECT_WIDE_SCOPES,
+    blocks,
+    partition,
+    unmatched_scopes,
+)
 from pii_erasure.contract.idempotency import IdempotencyKeyError, idempotency_key
 from pii_erasure.contract.outcomes import Deletability, Outcome
 from pii_erasure.contract.registry import PARTICIPANTS, ParticipantSpec
@@ -42,6 +48,7 @@ __all__ = [
     "PARTICIPANTS",
     "READ_ONLY_VERBS",
     "SCHEMA_VERSION",
+    "SUBJECT_WIDE_SCOPES",
     "Archetype",
     "Artifact",
     "CanonicalisationError",
@@ -65,6 +72,9 @@ __all__ = [
     "Verb",
     "VerifyRequest",
     "VerifyResponse",
+    "blocks",
     "canonical",
     "idempotency_key",
+    "partition",
+    "unmatched_scopes",
 ]

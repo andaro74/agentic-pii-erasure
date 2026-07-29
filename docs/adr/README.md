@@ -44,6 +44,7 @@ is a large part of what makes this repo worth reading.
 | [024](ADR-024-cedar-expresses-identity-and-shape.md) | Cedar expresses identity and request shape, not business state | Accepted — supersedes the policy set in ARCHITECTURE §9.2, refines [005](ADR-005-cedar-at-gateway.md), [018](ADR-018-agentcore-policy.md) |
 | [025](ADR-025-runtime-ships-a-code-zip.md) | The discovery Runtime ships as an S3 code zip, not a container image | Accepted — supersedes the container artifact implied by ARCHITECTURE §4 and PROJECT-STRUCTURE `runtime/Dockerfile` |
 | [026](ADR-026-no-middleware-seam.md) | There is no middleware seam, because the model holds no tools | Accepted — removes `policy/middleware.py` from the build and from invariant 0's allowlist; refines [013](ADR-013-langgraph-single-framework.md), [018](ADR-018-agentcore-policy.md) |
+| [027](ADR-027-holds-block-a-scope-not-a-subject.md) | A legal hold blocks its scope, not the subject | Accepted — supersedes the subject-wide veto in `saga/nodes/hold_check.py`, which called itself an M5 default |
 
 ## The supersession chains
 

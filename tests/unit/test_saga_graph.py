@@ -347,13 +347,48 @@ def test_approval_with_wrong_digest_unwinds_not_executes() -> None:
     assert "APPROVAL_INVALID" in rig.ledger.events()
 
 
-def test_manifest_hold_blocks_before_anything_mutates() -> None:
+def test_a_subject_wide_hold_blocks_before_anything_mutates() -> None:
+    """A court freezing everything still stops everything (ADR-027).
+
+    The scope was `"all"` until ADR-027 made scopes mean something, at which point it
+    matched only locators beginning with the letters "all" — i.e. nothing. That the test
+    still passed under the old code is exactly the point: a subject-wide veto made every
+    scope string equivalent, including a wrong one.
+    """
     rig = Rig()
-    hold = Hold(hold_id="hold-lit-001", authority="dc-court", scope="all", basis="Art.17(3)(e)")
+    hold = Hold(hold_id="hold-lit-001", authority="dc-court", scope="*", basis="Art.17(3)(e)")
     result = rig.start(legal_holds=(hold,))
     assert result["status"] == STATUS_BLOCKED
     assert rig.participants.tools_called("soft_delete") == []
     assert rig.participants.tools_called("hard_delete") == []
+
+
+def test_a_scoped_hold_does_not_stop_the_rest_of_the_estate() -> None:
+    """ADR-027's decision, at the graph level. A hold over one table gives no lawful
+    basis to retain the subject's uploads, so stopping everything over-retains — an
+    under-deletion with no error attached."""
+    rig = Rig()
+    hold = Hold(
+        hold_id="hold-lit-002",
+        authority="dc-court",
+        scope="public.invoices",
+        basis="Art.17(3)(e)",
+    )
+    result = rig.start(legal_holds=(hold,))
+    assert result["status"] != STATUS_BLOCKED, "a scoped hold vetoed the whole subject"
+    assert rig.participants.tools_called("soft_delete"), "nothing was erased under a scoped hold"
+    assert "HOLDS_SCOPED" in rig.ledger.events()
+
+
+def test_a_scope_that_matches_nothing_is_recorded() -> None:
+    """`scope: "all"` is a plausible thing to write and covers nothing. Under the old
+    subject-wide veto that mistake was invisible; under ADR-027 it silently protects
+    nothing, so the ledger names it rather than leaving it to be inferred."""
+    rig = Rig()
+    hold = Hold(hold_id="hold-typo", authority="dc-court", scope="all", basis="Art.17(3)(e)")
+    rig.start(legal_holds=(hold,))
+    body = next(body for event, body in rig.ledger.entries if event == "HOLDS_SCOPED")
+    assert body["scopesMatchingNothing"] == ["all"]
 
 
 def test_hold_appearing_at_recheck_blocks_phase3() -> None:
