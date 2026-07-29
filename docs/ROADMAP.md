@@ -226,7 +226,7 @@ There is no local mode ([ADR-017](adr/ADR-017-real-aws-participants.md)), so fro
 
 **Traps:** invariant 1 enforced in three places now — subgraph construction, the Cedar permit, and Gateway tool-list filtering · invariant 8: a red gate means a better agent or a new fixture, never a lower threshold · invariant 13: a Memory write containing anything subject-shaped is **rejected**, not sanitised · priors are advisory — a prior may reorder discovery but may never cause a system to be skipped.
 
-## - [ ] M8 · The operator surface and the deployed walkthrough
+## - [x] M8 · The operator surface and the deployed walkthrough
 
 > **Hermetic half landed 2026-07-28.** `approval/presenter.py` (ordering as the control),
 > `approval/api.py` + `infra/stacks/api.py` (Cognito-authenticated, every route asserted),
@@ -244,8 +244,27 @@ There is no local mode ([ADR-017](adr/ADR-017-real-aws-participants.md)), so fro
 > `admin-create-user` commands rather than falling back to invoking the Lambda. A fallback
 > would have made every walkthrough green over a control nobody exercised.
 >
-> Remaining for the tick: `make deploy-dev`, an operator in `asdp-approvers`, then
-> `make walkthrough` twice.
+> **Deployed gate run 2026-07-28/29.** Two clean arcs, corroborated in the tombstone
+> registry rather than taken from the console output: `saga_9c21aa1fc511` (675s, 6
+> systems) and `saga_13b51235e4ad` (627s, 4 systems). Different subjects by design — the
+> second run picks a subject the first has not erased, because a deterministic choice
+> would have aimed run 2 at run 1's tombstone (V11-7).
+>
+> **"Identically" means the shape, not the numbers.** Same eight steps, same gates, same
+> ordering; the participant counts follow the subject and differ, which is the intended
+> reading. A run whose *steps* varied would be describing a race.
+>
+> **Eight findings came out of this gate** (V11-1 … V11-8), and the deployed half found
+> what the hermetic half could not: a saga behind a 30-second HTTP request, a scrubber
+> that corrupted the digest invariant 3 binds to, a claims encoding assumed rather than
+> read, a certificate assertion that could never pass. Three of them — V11-1, V11-3,
+> V11-6 — were rules this repo had already written down in prose and never extended to
+> the class they described.
+>
+> **The one deliberately-failed run was the most useful.** `saga_e18f65d4c942` halted at
+> `BLOCKED_BY_HOLD` against the litigation fixture, which exercised the hold veto end to
+> end and surfaced the seed-versus-`hold_check` disagreement about scoped holds now
+> carried into M9.
 
 **Build:** `approval/presenter.py` (anomaly-first: baseline diff and residual risk **first**, never a 400-row inventory) · `approval/api.py` and `infra/stacks/api.py` (Cognito-authenticated HTTP API for intake, approval, and operator reads) · CLI: `discover`, `walkthrough`, `threads`, `resume`, `approve`, `ledger`.
 
