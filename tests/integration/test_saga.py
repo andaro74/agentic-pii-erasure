@@ -28,83 +28,39 @@ Scenarios, and how each maps to the roadmap's "done when":
 
 Seeding and teardown reuse the conformance rig's writers and cleanup via importlib —
 the same proven code path, not a second implementation.
+
+**Four of M9's documented chaos cases live in three of these tests**, which carry
+`@pytest.mark.chaos` so `make chaos` collects the documented set rather than a subset:
+phase-2 compensation, post-approval mutation, and — in one arc — the phase-3 DLQ halt
+*and* kill-mid-phase, since remediating the halt is what proves the resume runs with
+zero duplicate calls. `tests/integration/test_chaos.py` adds the three with no home here and
+explains the division. Marking beats copying — the weaker of two implementations of
+"phase 3 never compensates" would be the one that rots.
 """
 
 from __future__ import annotations
 
 import contextlib
-import importlib.util
 import json
-import os
 import time
 import uuid
 import warnings
 from collections.abc import Iterator
-from pathlib import Path
 from typing import Any
 
 import boto3
 import pytest
-from botocore.config import Config
 from botocore.exceptions import ClientError
 
-from evals.fixtures.generator import FixtureGenerator
 from pii_erasure.contract import Archetype, Artifact, Verb
 from pii_erasure.contract.idempotency import idempotency_key
 from pii_erasure.ledger import LedgerWriter, verify_chain
 from pii_erasure.manifest import ManifestParticipant, OrderSlot
 from pii_erasure.saga.tombstone import subject_hash
 from tests.conftest import build_fixture_manifest
+from tests.integration.conftest import EXECUTOR, RESUME, STAGE
 
 pytestmark = pytest.mark.integration
-
-STAGE = os.environ.get("PII_ERASURE_STAGE", "dev")
-REPO = Path(__file__).resolve().parents[2]
-
-_EXECUTOR = f"asdp-{STAGE}-saga-executor"
-_RESUME = f"asdp-{STAGE}-saga-resume"
-
-
-def _load_conformance() -> Any:
-    spec = importlib.util.spec_from_file_location(
-        "conformance_rig", REPO / "tests" / "conformance" / "test_contract.py"
-    )
-    assert spec is not None
-    assert spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-@pytest.fixture(scope="session")
-def rig() -> Any:
-    module = _load_conformance()
-    from pii_erasure.cli.main import _seed_clients, _stack_config
-
-    config = _stack_config(os.environ.get("PII_ERASURE_TENANT", "meridian"))
-    # allow_ses_sandbox=True: in a sandbox account the contact still gets seeded and
-    # the missing suppression entry is recorded as a degraded capability — which is
-    # exactly what the saga will then observe. Deterministic in both account states.
-    generator = FixtureGenerator(clients=_seed_clients(), config=config, allow_ses_sandbox=True)
-    return module, generator, config
-
-
-@pytest.fixture(scope="session")
-def lambda_client() -> Any:
-    # One invocation may legitimately run for minutes (Aurora resume, Athena).
-    # retries=0 is load-bearing: a client-side retry of `invoke` would be a
-    # duplicate saga step delivered by our own test harness.
-    client = boto3.client(
-        "lambda",
-        config=Config(read_timeout=910, connect_timeout=10, retries={"max_attempts": 0}),
-    )
-    try:
-        client.get_function(FunctionName=_EXECUTOR)
-    except ClientError as error:
-        if error.response["Error"]["Code"] != "ResourceNotFoundException":
-            raise
-        pytest.skip("saga stack is not deployed yet — run `make deploy-dev` (docs/ROADMAP.md M5)")
-    return client
 
 
 def _invoke(client: Any, function: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -147,7 +103,7 @@ def _ledger_events(saga_id: str) -> list[Any]:
 def _approve(client: Any, thread_id: str, digest: str) -> dict[str, Any]:
     return _invoke(
         client,
-        _EXECUTOR,
+        EXECUTOR,
         {
             "action": "resume",
             "thread_id": thread_id,
@@ -161,9 +117,9 @@ def _approve(client: Any, thread_id: str, digest: str) -> dict[str, Any]:
 
 
 def _run_sweeps_to_completion(client: Any, thread_id: str) -> dict[str, Any]:
-    result = _invoke(client, _RESUME, {"thread_id": thread_id, "wake_reason": "sweep_t7"})
+    result = _invoke(client, RESUME, {"thread_id": thread_id, "wake_reason": "sweep_t7"})
     assert result["status"] == "paused", f"after sweep_t7: {result}"
-    result = _invoke(client, _RESUME, {"thread_id": thread_id, "wake_reason": "sweep_t30"})
+    result = _invoke(client, RESUME, {"thread_id": thread_id, "wake_reason": "sweep_t30"})
     return result
 
 
@@ -206,7 +162,7 @@ def test_happy_path_pause_approve_resume_to_certified_clean(
 
     started = _invoke(
         lambda_client,
-        _EXECUTOR,
+        EXECUTOR,
         {
             "action": "start",
             "saga": {
@@ -236,7 +192,7 @@ def test_happy_path_pause_approve_resume_to_certified_clean(
     # the executor refuses the payload without letting it reach the graph (V9-3).
     stray = _invoke(
         lambda_client,
-        _EXECUTOR,
+        EXECUTOR,
         {
             "action": "resume",
             "thread_id": saga_id,
@@ -284,7 +240,7 @@ def test_happy_path_pause_approve_resume_to_certified_clean(
     # A re-request for the erased subject is refused at intake by the tombstone.
     rerun = _invoke(
         lambda_client,
-        _EXECUTOR,
+        EXECUTOR,
         {
             "action": "start",
             "saga": {
@@ -302,6 +258,7 @@ def test_happy_path_pause_approve_resume_to_certified_clean(
 # ─── kill mid-phase / phase-3 failure: one real lever ────────────────────────────────
 
 
+@pytest.mark.chaos
 def test_phase3_stuck_dlq_no_compensation_then_remediated_resume(
     rig: Any, lambda_client: Any, subject_all_eight: str
 ) -> None:
@@ -335,7 +292,7 @@ def test_phase3_stuck_dlq_no_compensation_then_remediated_resume(
     try:
         started = _invoke(
             lambda_client,
-            _EXECUTOR,
+            EXECUTOR,
             {
                 "action": "start",
                 "saga": {
@@ -383,7 +340,7 @@ def test_phase3_stuck_dlq_no_compensation_then_remediated_resume(
     # ── remediated: operator resume finishes the arc with zero duplicates ────
     resumed = _invoke(
         lambda_client,
-        _EXECUTOR,
+        EXECUTOR,
         {"action": "resume", "thread_id": saga_id, "resume": {"wake_reason": "retry_phase3"}},
     )
     assert resumed["status"] == "paused", resumed
@@ -409,6 +366,7 @@ _GHOST = ManifestParticipant(
 )
 
 
+@pytest.mark.chaos
 def test_phase2_failure_compensates_fully(rig: Any, lambda_client: Any) -> None:
     module, generator, config = rig
     subset = ("cognito-identity", "profile-store")
@@ -422,7 +380,7 @@ def test_phase2_failure_compensates_fully(rig: Any, lambda_client: Any) -> None:
         )
         started = _invoke(
             lambda_client,
-            _EXECUTOR,
+            EXECUTOR,
             {
                 "action": "start",
                 "saga": {
@@ -462,6 +420,7 @@ def test_phase2_failure_compensates_fully(rig: Any, lambda_client: Any) -> None:
 # ─── post-approval mutation → abort to re-approval ───────────────────────────────────
 
 
+@pytest.mark.chaos
 def test_approval_bound_to_a_different_digest_unwinds(rig: Any, lambda_client: Any) -> None:
     _module, generator, config = rig
     subset = ("cognito-identity", "profile-store")
@@ -474,7 +433,7 @@ def test_approval_bound_to_a_different_digest_unwinds(rig: Any, lambda_client: A
         )
         started = _invoke(
             lambda_client,
-            _EXECUTOR,
+            EXECUTOR,
             {
                 "action": "start",
                 "saga": {

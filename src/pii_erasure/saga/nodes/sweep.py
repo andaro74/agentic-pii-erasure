@@ -57,7 +57,16 @@ def make_sweep(deps: SagaDeps) -> Callable[[dict[str, Any]], dict[str, Any]]:
             if wake != reason:
                 raise ResumeValidationError(f"sweep resumed with {wake!r}, expected {reason!r}")
 
-            swept, unexpected = verify_all_participants(deps, manifest, verify_prefix=reason)
+            swept, unexpected = verify_all_participants(
+                deps,
+                manifest,
+                verify_prefix=reason,
+                # A residual disclosed at hard-delete time is still lawfully there at
+                # T+7 and T+30. What makes a sweep interesting is artifacts NOBODY
+                # disclosed — including *more* rows under a held locator than the hold
+                # retained, which the count comparison catches.
+                receipts_so_far=state.get("receipts"),
+            )
             receipts.update(swept)
             sweeps_done.append(reason)
 

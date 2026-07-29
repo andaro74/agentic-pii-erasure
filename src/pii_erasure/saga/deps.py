@@ -78,8 +78,10 @@ class SagaDeps:
     #: (T+7 delay, T+30 delay) in seconds. Integration shortens these; the *sequence*
     #: is never shortened — both sweeps always run.
     sweep_delays_seconds: tuple[int, int] = DEFAULT_SWEEP_DELAYS_SECONDS
-    #: `None` uses the manifest's graceWindowDays; an integer overrides it for dev
-    #: stages so `make integration` does not wait 30 days. Zero skips the pause.
+    #: `None` uses the manifest's graceWindowDays; an integer **caps** it for dev stages
+    #: so `make integration` does not wait 30 days. A ceiling rather than a replacement:
+    #: it may only shorten the window a manifest asked for, never lengthen it (V12-1).
+    #: Zero skips the pause.
     grace_seconds_override: int | None = None
     #: Bounded forward-recovery retries per participant in phase 3, then the DLQ.
     hard_delete_attempts: int = 3

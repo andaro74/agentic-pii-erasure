@@ -4,6 +4,8 @@ The subject may revoke the erasure request during this window — that resume ro
 compensation, restoring the soft-deleted state. A zero-length window (fixture
 manifests, dev overrides) skips the pause entirely rather than scheduling a wake in
 the past, which EventBridge Scheduler would reject.
+
+`GRACE_SECONDS_OVERRIDE` **caps** the window; it does not set it. See below.
 """
 
 from __future__ import annotations
@@ -29,11 +31,15 @@ _VALID_WAKES = frozenset({"grace_elapsed", "revoked"})
 def make_grace_window(deps: SagaDeps) -> Callable[[dict[str, Any]], dict[str, Any]]:
     def grace_window(state: dict[str, Any]) -> dict[str, Any]:
         manifest = manifest_from_state(state)
-        seconds = (
-            deps.grace_seconds_override
-            if deps.grace_seconds_override is not None
-            else manifest.grace_window_days * 86400
-        )
+        # The override is a CEILING, not a replacement. Its job (V11-1) is to stop a dev
+        # saga sitting here for the manifest's 30 days. A manifest that already asks for
+        # less is already shorter than dev needs, and *lengthening* it was never the
+        # intent this file documents — the integration suite's fixture manifests ask for
+        # zero, and a replacement silently gave them 120 seconds and a pause at a gate
+        # their assertions say is skipped (V12-1).
+        manifest_seconds = manifest.grace_window_days * 86400
+        override = deps.grace_seconds_override
+        seconds = min(manifest_seconds, override) if override is not None else manifest_seconds
         if seconds <= 0:
             deps.ledger.append(
                 saga_id=manifest.saga_id,

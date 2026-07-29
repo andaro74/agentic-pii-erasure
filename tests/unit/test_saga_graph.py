@@ -13,7 +13,7 @@ from __future__ import annotations
 import base64
 import json
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import pytest
@@ -22,6 +22,7 @@ from langgraph.types import Command
 
 from pii_erasure.approval.tokens import ApprovalTokenError
 from pii_erasure.contract import (
+    Artifact,
     Deletability,
     DiscoverResponse,
     DiscoveryEvidence,
@@ -29,6 +30,7 @@ from pii_erasure.contract import (
     MutationResponse,
     Outcome,
     ReceiptEvidence,
+    Residual,
     VerifyResponse,
 )
 from pii_erasure.contract.registry import get as registry_get
@@ -38,6 +40,7 @@ from pii_erasure.saga.deps import SagaDeps
 from pii_erasure.saga.graph import build_graph
 from pii_erasure.saga.invoker import ParticipantCallError
 from pii_erasure.saga.nodes.hard_delete import make_hard_delete
+from pii_erasure.saga.nodes.sweep import STATUS_RESURRECTION
 from pii_erasure.saga.state import (
     STATUS_ABORTED,
     STATUS_ALREADY_TOMBSTONED,
@@ -63,6 +66,13 @@ class FakeParticipants:
         self.calls: list[tuple[str, str, dict[str, Any]]] = []
         self.failures: dict[tuple[str, str], Exception] = {}
         self.hold_on_discover: dict[str, Hold] = {}
+        #: What `hard_delete` discloses it could not action — a PARTIAL outcome. The
+        #: scoped-hold shape (ADR-027): the participant deletes what it may and names
+        #: what it kept.
+        self.residual_on_hard_delete: dict[str, tuple[Residual, ...]] = {}
+        #: What `verify` still finds. Mutable between resumes on purpose — that is how
+        #: a sweep at T+7 sees a world the T+0 verify did not.
+        self.remaining_on_verify: dict[str, tuple[Artifact, ...]] = {}
 
     def call(self, system_id: str, tool: str, payload: dict[str, Any]) -> dict[str, Any]:
         self.calls.append((system_id, tool, payload))
@@ -81,16 +91,22 @@ class FakeParticipants:
                 holds=(hold,) if hold else (),
             ).digested_body()
         if tool == "verify":
+            remaining = self.remaining_on_verify.get(system_id, ())
             return VerifyResponse(
                 system_id=system_id,
-                clean=True,
+                clean=not remaining,
+                remaining=remaining,
                 evidence=DiscoveryEvidence(query_digest=_ZERO, observed_at=_TS),
             ).digested_body()
         if tool in ("soft_delete", "restore", "hard_delete"):
+            residual = (
+                self.residual_on_hard_delete.get(system_id, ()) if tool == "hard_delete" else ()
+            )
             return MutationResponse(
                 system_id=system_id,
-                outcome=Outcome.APPLIED,
+                outcome=Outcome.PARTIAL if residual else Outcome.APPLIED,
                 affected=1,
+                residual=residual,
                 evidence=ReceiptEvidence(receipt_digest=_ZERO, applied_at=_TS),
                 restore_token=f"rt-{system_id}" if tool == "soft_delete" else None,
             ).digested_body()
@@ -475,6 +491,124 @@ def test_revocation_during_grace_window_compensates() -> None:
     assert result["status"] == STATUS_COMPENSATED
     assert rig.participants.tools_called("hard_delete") == []
     assert "REQUEST_REVOKED" in rig.ledger.events()
+
+
+# ─── the dev grace override is a ceiling, not a replacement (V12-1) ───────────────────
+
+
+def test_grace_override_never_lengthens_a_window_the_manifest_made_shorter() -> None:
+    """The deployed dev configuration, which no hermetic test exercised until now.
+
+    `GRACE_SECONDS_OVERRIDE=120` exists so a dev saga does not sit here for the
+    manifest's 30 days (V11-1). Read as a *replacement* it also overrode a deliberate
+    zero: every fixture manifest asks for `graceWindowDays: 0`, so on a dev stack the
+    integration suite's sagas paused at a gate their assertions say is skipped — M5's
+    deployed gate, silently invalidated by an M8 fix, with nothing to re-run it (V12-1).
+    """
+    rig = Rig(grace_override=120)
+    paused = rig.start(grace_days=0)
+    result = rig.approve(paused)
+
+    assert result["__interrupt__"][0].value["gate"] == "sweep"
+    assert "GRACE_WINDOW_SKIPPED" in rig.ledger.events()
+    assert "grace_elapsed" not in rig.scheduler.reasons()
+
+
+def test_grace_override_still_compresses_a_long_window() -> None:
+    """The half V11-1 was written for: 30 days becomes 120 seconds, and the timer is
+    real — compression by stack parameter, never by bypassing the scheduler."""
+    rig = Rig(grace_override=120)
+    paused = rig.start(grace_days=30)
+    result = rig.approve(paused)
+
+    assert result["__interrupt__"][0].value["gate"] == "grace_window"
+    assert result["__interrupt__"][0].value["graceSeconds"] == 120
+    scheduled = next(r for r in rig.scheduler.requests if r.reason == "grace_elapsed")
+    assert scheduled.at == _NOW + timedelta(seconds=120)
+
+
+# ─── a disclosed residual is not a failed erasure (ADR-027, V12-2) ────────────────────
+
+#: `billing-ledger` retaining `public.invoices` under a litigation hold: the shape
+#: ADR-027 made reachable, expressed the way the real participant expresses it.
+_HELD_ROWS = Residual(
+    kind="row",
+    locator="public.invoices",
+    count=3,
+    reason="Retained under a live legal hold (GDPR Art. 17(3)(e)).",
+)
+
+
+def _rig_with_a_scoped_hold_residual() -> Rig:
+    rig = Rig()
+    rig.participants.residual_on_hard_delete["billing-ledger"] = (_HELD_ROWS,)
+    rig.participants.remaining_on_verify["billing-ledger"] = (
+        Artifact(kind="row", locator="public.invoices", count=3),
+    )
+    return rig
+
+
+def test_a_residual_the_participant_disclosed_does_not_halt_the_saga() -> None:
+    """ADR-027 lets phase 3 proceed past a scoped hold. The node that runs immediately
+    afterwards then declared the result a failed erasure.
+
+    `billing-ledger` is not registered `expects_residual` — its residue is not
+    structural, it is one hold on one saga — so the T+0 verify graded lawful retention
+    as unexpected residue, DLQ'd it and halted at `stuck`. ADR-027's "proceeds for the
+    rest" was therefore unreachable end to end: the rule was written into `hold_recheck`
+    and never extended to the two nodes downstream of it (V12-2).
+    """
+    rig = _rig_with_a_scoped_hold_residual()
+    result = _run_happy_path_to_completion(rig)
+
+    assert result["status"] == STATUS_COMPLETED
+    assert "VERIFY_FOUND_RESIDUE" not in rig.ledger.events()
+    assert "RESURRECTION_INCIDENT" not in rig.ledger.events()
+    assert rig.dlq.messages == []
+    assert "VERIFIED_CLEAN" in rig.ledger.events()
+
+
+def test_more_rows_than_the_hold_retained_is_still_a_resurrection() -> None:
+    """The disclosure is a *quantity*, not a licence. Five rows under a locator whose
+    hold retained three is data that came back, and the count comparison is what keeps
+    the exemption from becoming a blind spot for the held participant."""
+    rig = _rig_with_a_scoped_hold_residual()
+    paused = rig.start()
+    result = rig.approve(paused)
+    assert result["__interrupt__"][0].value["gate"] == "sweep"
+
+    rig.participants.remaining_on_verify["billing-ledger"] = (
+        Artifact(kind="row", locator="public.invoices", count=5),
+    )
+    result = rig.resume({"wake_reason": "sweep_t7"})
+
+    assert result["status"] == STATUS_RESURRECTION
+    assert "RESURRECTION_INCIDENT" in rig.ledger.events()
+    assert [m["operation"] for m in rig.dlq.messages] == ["sweep_t7"]
+    assert rig.participants.tools_called("restore") == []
+
+
+def test_undisclosed_artifacts_at_the_first_sweep_are_a_resurrection_incident() -> None:
+    """The plain case, which had no hermetic test at all: a participant that disclosed
+    nothing reports artifacts at T+7. Distinct from a deletion failure — a *systemic*
+    write path that bypasses the tombstone check — and it must never compensate."""
+    rig = Rig()
+    paused = rig.start()
+    result = rig.approve(paused)
+    assert result["__interrupt__"][0].value["gate"] == "sweep"
+
+    rig.participants.remaining_on_verify["profile-store"] = (
+        Artifact(kind="item", locator="profile-store:sub_unit_fixture", count=2),
+    )
+    result = rig.resume({"wake_reason": "sweep_t7"})
+
+    assert result["status"] == STATUS_RESURRECTION
+    incident = next(body for event, body in rig.ledger.entries if event == "RESURRECTION_INCIDENT")
+    assert incident["sweep"] == "sweep_t7"
+    assert [u["systemId"] for u in incident["unexpected"]] == ["profile-store"]
+    assert rig.dlq.messages[0]["resurrection"][0]["systemId"] == "profile-store"
+    assert rig.participants.tools_called("restore") == []
+    assert "SAGA_COMPLETED" not in rig.ledger.events()
 
 
 def test_tombstoned_subject_is_refused_at_intake() -> None:

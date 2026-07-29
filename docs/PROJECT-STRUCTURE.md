@@ -290,6 +290,9 @@ tests/
 │                   milestone has not landed skip with a reason and become
 │                   mandatory automatically when their function appears.
 └── integration/    full saga; chaos; compensation; resurrection; upgrade canary [needs AWS]
+                    `make chaos` runs `-m chaos`, which collects `test_chaos.py` AND the
+                    four cases in `test_saga.py` that carry the marker — the list below
+                    lives in two files, not one, and neither reimplements the other.
 ```
 
 `moto` covers participant handler *logic* — argument shaping, ordering, residual construction — so the fast loop stays fast. It is never a substitute for a gate: the interesting failures are delete markers, GSI lag, Object Lock, and KMS deletion windows, and a mock reproduces none of them.

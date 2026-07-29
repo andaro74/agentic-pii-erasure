@@ -17,7 +17,15 @@ from pii_erasure.saga.state import STATUS_STUCK
 def make_verify(deps: SagaDeps) -> Callable[[dict[str, Any]], dict[str, Any]]:
     def verify(state: dict[str, Any]) -> dict[str, Any]:
         manifest = manifest_from_state(state)
-        receipts, unexpected = verify_all_participants(deps, manifest, verify_prefix="verify")
+        receipts, unexpected = verify_all_participants(
+            deps,
+            manifest,
+            verify_prefix="verify",
+            # Graded against what phase 3 disclosed, so a residual a participant named
+            # in its own receipt — a scoped legal hold, ADR-027 — is not read as a
+            # failed erasure by the node that runs immediately after it.
+            receipts_so_far=state.get("receipts"),
+        )
 
         if unexpected:
             deps.dead_letters.send(
