@@ -268,6 +268,16 @@ There is no local mode ([ADR-017](adr/ADR-017-real-aws-participants.md)), so fro
 
 **Deployed done when:** `make chaos` green · `bash scripts/upgrade_canary.sh` passes — pause a saga, bump the pinned `langgraph` **and `langgraph-checkpoint-aws`**, assert a clean resume from the same DynamoDB table.
 
+> **Carried in from M8's deployed gate (V11-8).** `seeds/meridian.json` says the
+> litigation hold is *"scoped to one table on purpose — the uploads and profile items are
+> still erased"*, while `saga/nodes/hold_check.py` blocks the whole saga on any hold and
+> says so deliberately (*"partial-scope erasure under a hold is a policy decision no
+> default should make"*). Both are defensible; they cannot both be the design, and the
+> fixture's `proves` field currently claims a property the platform demonstrates only
+> half of. **Decide it here, with an ADR**, alongside the hold-during-grace-window case —
+> that is the scenario where a scoped hold either does or does not stop phase 3 for the
+> participants it never named.
+
 **Traps:** the canary is [ADR-016](adr/ADR-016-serverless-durability.md)'s only control that actually catches a stranded saga — the script is the contract; the test implements it exactly · the canary must cover both pins, because serialization lives in the checkpoint package as much as in `langgraph` (VALIDATION baseline finding #3, in its new clothes).
 
 ## - [ ] M10 · Production posture

@@ -1278,6 +1278,26 @@ It was enforced by test — for `subject_ref`. Digests and ARNs are the same cla
 
 The alternative — a file recording which subjects the walkthrough had used — was rejected: it is a second source of truth for a fact the tombstone registry already holds authoritatively, and it would drift the first time someone ran `make destroy-dev` without deleting it.
 
+### 2026-07-28 · V11-8 — the walkthrough picked the litigation-hold fixture
+
+| ID | Severity | Finding | Resolution |
+|---|---|---|---|
+| **V11-8a** | **Medium** | **`seeded_subject()` ignored legal holds.** Run 2 picked `sub_dmi_2b8e4406` — the fixture that exists *specifically* to prove holds veto — and the saga correctly halted at `blocked` with `BLOCKED_BY_HOLD` in the ledger. Nothing was wrong with the platform. The generated map already records holds (`truth["holds"]`); the walkthrough was not reading them. | Subjects under hold are excluded. An empty hold list means "checked, none found" and does **not** exclude, so a stack with no holds does not exhaust its fixtures. |
+| **V11-8b** | **Medium** | **A terminal status explained nothing.** The failure read *"halted at status 'blocked' … Errors: none recorded"* — accurate, and useless. Worse, "none recorded" reads as a *swallowed* error, when a blocked saga is the system refusing correctly and having nothing to apologise for. | Each terminal status now carries one sentence of meaning: what happened, whether anything mutated, and where to look. Recorded errors are still appended, never replaced. |
+| **V11-8c** | **Medium** | **`no_data` was never added to `TERMINAL_STATUSES`.** Introduced in the saga at V11-4 and missed in the CLI's terminal set, so a saga ending "nothing to erase" would have been polled for the full fifteen minutes. **Caught by a test written for V11-8b**, not by a run. | Added, and the two hand-maintained lists now have a test asserting they agree in both directions. |
+
+**V11-8c is the argument for these tests in miniature.** It was introduced by my own fix three findings earlier, would have surfaced only on a subject with no data anywhere, and was found by a consistency check between two lists that a human reading either one would have called complete.
+
+**An open question this surfaced, deliberately not resolved here.** `seeds/meridian.json` says of the litigation hold:
+
+> *"Scoped to one table on purpose. The uploads and profile items are still erased; treating a scoped hold as subject-wide would silently under-delete."*
+
+`saga/nodes/hold_check.py` does the opposite, and says so explicitly:
+
+> *"Aggregate `legalHolds` on the manifest block outright; participant-level holds do too at M5 — partial-scope erasure under a hold is a policy decision no default should make, and the safe default is to stop."*
+
+Both are defensible; they cannot both be the design. The seed's `proves` field claims "holds are an unconditional veto, **and they are scoped**" — the platform demonstrates the first half only. **Not resolved in this commit**, because moving from "any hold stops everything" to "a scoped hold permits partial erasure" is a policy decision that needs an ADR and belongs with M9's hold-during-grace-window chaos case. Recorded here so it is a decision someone makes rather than a difference nobody noticed.
+
 1. Read a doc claim as an adversary: *what would make this false, and could the
    named control detect it?*
 2. If the control can't go red, that's a finding — record it here with the fix and

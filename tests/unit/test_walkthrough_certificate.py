@@ -127,7 +127,7 @@ def test_a_map_with_no_placements_is_refused(
     truth.write_text(json.dumps({"subjects": {"sub_a": {}}}), encoding="utf-8")
     monkeypatch.setattr(walkthrough, "GROUND_TRUTH", truth)
     monkeypatch.setattr(walkthrough, "_tombstoned", lambda refs: set())
-    with pytest.raises(OperationError, match="no placed artifacts"):
+    with pytest.raises(OperationError, match="no subject with data"):
         walkthrough.seeded_subject()
 
 
@@ -198,3 +198,60 @@ def test_the_richest_remaining_subject_wins(
     )
     monkeypatch.setattr(walkthrough, "_tombstoned", lambda refs: set())
     assert walkthrough.seeded_subject() == "sub_many"
+
+
+# ─── a held subject demonstrates the veto, not the arc (V11-8) ────────────────────────
+
+
+def test_a_subject_under_legal_hold_is_skipped(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`hold_check` stops the saga before phase 2 and writes BLOCKED_BY_HOLD. That is the
+    veto working — `sub_dmi_2b8e4406` exists in the fixtures precisely to prove it — but
+    proving the veto is a different demonstration from proving the arc, and M8's gate
+    measures the arc."""
+    truth = tmp_path / "ground-truth.json"
+    truth.write_text(
+        json.dumps(
+            {
+                "subjects": {
+                    "sub_held": {"a": {}, "b": {}, "c": {}, "d": {}},
+                    "sub_clear": {"a": {}, "b": {}},
+                },
+                "holds": {"sub_held": ["hold_litigation"]},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(walkthrough, "GROUND_TRUTH", truth)
+    monkeypatch.setattr(walkthrough, "_tombstoned", lambda refs: set())
+    assert walkthrough.seeded_subject() == "sub_clear"
+
+
+def test_an_empty_hold_list_does_not_exclude(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`{"sub_a": []}` means "checked, none found" — excluding it would shrink the pool
+    for no reason and could exhaust the fixtures on a stack that has no holds at all."""
+    truth = tmp_path / "ground-truth.json"
+    truth.write_text(
+        json.dumps({"subjects": {"sub_a": {"x": {}}}, "holds": {"sub_a": []}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(walkthrough, "GROUND_TRUTH", truth)
+    monkeypatch.setattr(walkthrough, "_tombstoned", lambda refs: set())
+    assert walkthrough.seeded_subject() == "sub_a"
+
+
+def test_only_held_subjects_left_says_to_reseed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    truth = tmp_path / "ground-truth.json"
+    truth.write_text(
+        json.dumps({"subjects": {"sub_held": {"x": {}}}, "holds": {"sub_held": ["h1"]}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(walkthrough, "GROUND_TRUTH", truth)
+    monkeypatch.setattr(walkthrough, "_tombstoned", lambda refs: set())
+    with pytest.raises(OperationError, match="legal hold"):
+        walkthrough.seeded_subject()

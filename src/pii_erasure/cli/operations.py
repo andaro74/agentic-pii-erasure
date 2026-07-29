@@ -305,7 +305,48 @@ def verify_ledger(saga_id: str | None = None) -> tuple[int, list[LedgerEntry]]:
 #: which the operator believes work is in progress. `state.py` owns these names; they are
 #: repeated rather than imported because `cli/` must not depend on the saga package's
 #: framework-bearing modules.
-TERMINAL_STATUSES = frozenset({"completed", "compensated", "blocked", "stuck", "aborted"})
+TERMINAL_STATUSES = frozenset(
+    # `no_data` was added to the saga at V11-4 and NOT added here — caught by
+    # `test_the_terminal_set_and_the_explanations_agree`, which is the whole reason
+    # two hand-maintained lists get a test that compares them. A saga ending at
+    # `no_data` would have been polled for the full fifteen minutes.
+    {"completed", "compensated", "blocked", "stuck", "aborted", "no_data"}
+)
+
+
+#: What each terminal status MEANS, for an operator who did not write the saga. "halted
+#: at status 'blocked'. Errors: none recorded" is accurate and tells you nothing — worse,
+#: "none recorded" reads as a swallowed error when in fact a blocked saga is the system
+#: refusing correctly and having nothing to apologise for (V11-8).
+_TERMINAL_EXPLANATIONS = {
+    "blocked": (
+        "A legal hold vetoed this erasure before anything mutated. That is the hold "
+        "working, not a failure — check the ledger for BLOCKED_BY_HOLD and the holdIds."
+    ),
+    "no_data": (
+        "Discovery found the subject in no system at all. Legitimate, and still owed an "
+        "answer under Art. 12(3) — but nothing was erased because there was nothing to erase."
+    ),
+    "aborted": (
+        "The manifest digest did not match after approval, so phase 3 never ran. Nothing "
+        "irreversible happened; a new manifest needs a new approval (invariant 3)."
+    ),
+    "stuck": (
+        "Phase 3 ran out of forward road and raised the DLQ. It does NOT compensate "
+        "(invariant 6) — a human remediates and resumes. Check the SQS DLQ."
+    ),
+    "compensated": (
+        "Phase 2 failed and the soft deletes were unwound. The subject's data is intact."
+    ),
+}
+
+
+def _why(status: str, state: dict[str, Any]) -> str:
+    """One sentence of meaning, then the recorded errors if there are any."""
+    explanation = _TERMINAL_EXPLANATIONS.get(status, "")
+    errors = state.get("errors")
+    detail = f" Errors: {errors}" if errors else ""
+    return f"{explanation}{detail}" or "No explanation recorded."
 
 
 def wait_for(
@@ -350,7 +391,7 @@ def wait_for(
         if current in TERMINAL_STATUSES and current != status:
             raise OperationError(
                 f"{thread_id} halted at status {current!r} while waiting for "
-                f"{gate or status!r}. Errors: {last.get('errors') or 'none recorded'}"
+                f"{gate or status!r}. {_why(current, last)}"
             )
         # `describe` returns "unknown" for a thread with no checkpoint. Right after an
         # async intake that just means the executor has not started yet; if it persists,

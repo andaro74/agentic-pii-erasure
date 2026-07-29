@@ -72,10 +72,21 @@ def seeded_subject() -> str:
             f"seeded subject; it cannot invent one, because a subject with no data "
             f"anywhere produces an empty plan and demonstrates nothing."
         )
-    subjects = json.loads(GROUND_TRUTH.read_text(encoding="utf-8")).get("subjects", {})
-    placed = {ref: systems for ref, systems in subjects.items() if systems}
+    truth = json.loads(GROUND_TRUTH.read_text(encoding="utf-8"))
+    subjects = truth.get("subjects", {})
+    held = {ref for ref, ids in (truth.get("holds") or {}).items() if ids}
+    # A subject under a legal hold cannot complete the arc, and should not: `hold_check`
+    # stops the saga before phase 2 and writes BLOCKED_BY_HOLD. That is the veto working,
+    # and `sub_dmi_2b8e4406` exists in the fixtures precisely to prove it — but proving
+    # the veto is a different demonstration from proving the arc, and the gate measures
+    # the arc. The generated map records holds already; this just reads them (V11-8).
+    placed = {ref: systems for ref, systems in subjects.items() if systems and ref not in held}
     if not placed:
-        raise OperationError(f"{GROUND_TRUTH} records no placed artifacts — re-run `make seed`.")
+        raise OperationError(
+            f"{GROUND_TRUTH} offers no subject with data and no legal hold — re-run "
+            f"`make seed`. (Subjects under hold are skipped: they block at `hold_check` "
+            f"by design, which demonstrates the veto rather than the arc.)"
+        )
 
     # Skip anyone already erased. The gate's word is "twice", and this function was
     # deterministic — `max()` over the same map returns the same subject — so the second

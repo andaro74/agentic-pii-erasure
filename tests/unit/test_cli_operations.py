@@ -268,3 +268,45 @@ def test_reaching_the_gate_wins(monkeypatch: pytest.MonkeyPatch) -> None:
         lambda thread_id: {"status": "paused", "gate": "approval"},
     )
     assert operations.wait_for("saga_1", gate="approval")["gate"] == "approval"
+
+
+# ─── a terminal status must explain itself (V11-8) ────────────────────────────────────
+
+
+def test_a_blocked_saga_explains_that_the_hold_worked(monkeypatch: pytest.MonkeyPatch) -> None:
+    """ "halted at status 'blocked'. Errors: none recorded" is accurate and tells an
+    operator nothing — worse, "none recorded" reads as a swallowed error, when a blocked
+    saga is the system refusing correctly and having nothing to apologise for."""
+    monkeypatch.setattr(
+        operations, "describe_thread", lambda thread_id: {"status": "blocked", "gate": None}
+    )
+    with pytest.raises(OperationError) as raised:
+        operations.wait_for("saga_1", gate="approval")
+    message = str(raised.value)
+    assert "legal hold" in message
+    assert "not a failure" in message
+    assert "none recorded" not in message
+
+
+@pytest.mark.parametrize("status", ["blocked", "no_data", "aborted", "stuck", "compensated"])
+def test_every_terminal_status_has_an_explanation(status: str) -> None:
+    """A status with no explanation is the one an operator will meet at 2am."""
+    assert operations._TERMINAL_EXPLANATIONS.get(status), f"{status} explains nothing"
+
+
+def test_the_terminal_set_and_the_explanations_agree() -> None:
+    """Two lists that must not drift: a status in one and not the other is either an
+    unexplained halt or an explanation for something that never halts."""
+    assert set(operations._TERMINAL_EXPLANATIONS) <= operations.TERMINAL_STATUSES
+    assert operations.TERMINAL_STATUSES - {"completed"} <= set(operations._TERMINAL_EXPLANATIONS)
+
+
+def test_recorded_errors_are_still_shown(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The explanation supplements the detail; it must not replace it."""
+    monkeypatch.setattr(
+        operations,
+        "describe_thread",
+        lambda thread_id: {"status": "stuck", "gate": None, "errors": [{"where": "phase3"}]},
+    )
+    with pytest.raises(OperationError, match="phase3"):
+        operations.wait_for("saga_1", gate="approval")
