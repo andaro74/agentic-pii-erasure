@@ -194,6 +194,47 @@ def test_a_tampered_entry_still_fails(monkeypatch: pytest.MonkeyPatch) -> None:
         operations.verify_ledger()
 
 
+def test_the_scan_projects_the_attribute_the_table_actually_has(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`make ledger` with no `--saga` scans for the sagas the table holds, and had never
+    run: it projected `sagaId` when the attribute is `saga_id`, so DynamoDB returned an
+    empty item per row and the first one raised `KeyError` (V12-4).
+
+    Nothing caught it because every other test here monkeypatches `ledger_entries`
+    wholesale — the seam with the defect was the seam the tests replaced. So this one
+    fakes the *client*, one layer lower, and builds its rows with the writer's own
+    serialiser so the attribute name cannot drift between the two files again.
+    """
+    from pii_erasure.ledger.writer import _to_item
+
+    rows = [_to_item(_chain(saga, 1)[0]) for saga in ("saga_a", "saga_b")]
+    projected: list[str] = []
+
+    class _FakePaginator:
+        def paginate(self, **kwargs: Any) -> Any:
+            projected.append(kwargs["ProjectionExpression"])
+            keys = {kwargs["ProjectionExpression"]}
+            yield {"Items": [{k: v for k, v in row.items() if k in keys} for row in rows]}
+
+    class _FakeDdb:
+        def get_paginator(self, name: str) -> Any:
+            assert name == "scan"
+            return _FakePaginator()
+
+        def query(self, **kwargs: Any) -> Any:
+            wanted = kwargs["ExpressionAttributeValues"][":sid"]["S"]
+            return {"Items": [r for r in rows if r["saga_id"]["S"] == wanted]}
+
+    monkeypatch.setattr(operations, "outputs", lambda *_: {"LedgerTable": "asdp-test-ledger"})
+    monkeypatch.setattr("boto3.client", lambda *_a, **_k: _FakeDdb())
+
+    found = operations.ledger_entries()
+
+    assert projected == ["saga_id"]
+    assert sorted(e.saga_id for e in found) == ["saga_a", "saga_b"]
+
+
 def test_entries_are_ordered_before_verification(monkeypatch: pytest.MonkeyPatch) -> None:
     """A scan returns rows in whatever order DynamoDB likes; a chain verified out of
     order fails on sequence, not on tampering."""

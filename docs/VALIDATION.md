@@ -1320,6 +1320,30 @@ The general form is worth stating, because it is not about grace windows: **tick
 
 **This is the fifth instance of the pattern this file has now recorded four times before** ([V10-5](#2026-07-27--v10-5--the-cache-strip-that-named-two-of-three-assets), [V10-8](#2026-07-27--v10-8--the-harness-tried-to-borrow-the-identity-it-was-measuring), [V11-3](#2026-07-28--v11-3--a-saga-behind-an-http-request-and-a-comment-that-said-so), [V11-6](#2026-07-28--v11-6--the-pii-scrubber-corrupted-the-value-invariant-3-binds-to)): a rule written for the case that prompted it and never extended to the class. ADR-027 was mine, written three commits earlier, and I applied it to the two nodes that *evaluate* holds without asking which other code reads the state those nodes produce. The question that catches it is the same one every time — **what else is in this category?** — and the honest observation is that asking it once per finding has not made me ask it once per rule.
 
+### 2026-07-29 · V12-3 — the fake had no foreign keys, so it certified a statement the database refuses
+
+**Found by `make chaos` against the deployed stack** — the first run of the suite, and the case it was written for.
+
+| ID | Severity | Finding | Resolution |
+|---|---|---|---|
+| **V12-3** | **High** | **A scoped hold made `billing-ledger` delete a row its retained rows point at.** With a hold over `public.invoices`, the handler retained that table and deleted `public.customers` — which `invoices.subject_ref REFERENCES public.customers ON DELETE RESTRICT`. Aurora refused all three attempts (`SQLState 23503`), phase 3 raised the DLQ and halted at `stuck`. Correct behaviour by the saga; the participant asked for something impossible. | A retained table now drags its foreign-key **parents** into retention (`_FK_PARENTS`, derived from the schema by a test so the two cannot drift). The two retentions are disclosed as the two different facts they are: `public.invoices` is retained *under* hold `hold-…`, `public.customers` *because* the held table references it — telling an approver a court named a table it did not would be a false disclosure. `public.invoice_lines`, a child of the held table that nothing surviving depends on, is still erased: the scope stays literal in the direction where literal is safe. |
+
+**The hermetic test asserted the bug.** `test_a_scoped_hold_retains_only_its_scope` ended with `assert any("customers" in s for s in DELETE statements)` — and passed for four milestones, because `_FakeDataApi` models counts and holds and knows nothing about referential integrity. CLAUDE.md already says moto "is never a gate: the failures that matter — delete markers, GSI lag, Object Lock, KMS deletion windows — are precisely the ones it does not model." Foreign keys belong on that list, and this participant's registry lesson is literally *"referential integrity dictates ordering"*.
+
+The fake now raises on deleting a parent whose child still holds rows — one rule, the one its own `schema.py` declares three lines from the statements it runs — and reverting the fix turns three tests red with the message Aurora gave. **A fake that cannot fail the way the service fails is not testing the handler, it is agreeing with it.**
+
+One consequence worth naming: the closure makes a hold over the *leaf* table retain the whole chain, which would have landed in the `REFUSED` branch and reported a court order over `customers` that no court wrote. `REFUSED` is now reserved for a hold whose own scope covers every table — it routes to the DLQ and the `stuck` gate, which is right for "a court froze this system" and wrong for "one table was frozen and the keys point upwards". The latter is a `PARTIAL` with `affected=0`: an honest full retention, disclosed table by table.
+
+### 2026-07-29 · V12-4 — an operator command that had never once run
+
+| ID | Severity | Finding | Resolution |
+|---|---|---|---|
+| **V12-4** | **Medium** | **`make ledger` raised `KeyError: 'sagaId'` on its first row.** The no-`--saga` form scans for the sagas the table holds and projected `sagaId`; the DynamoDB attribute is `saga_id`, the table's partition key. DynamoDB does not error on projecting an attribute that does not exist — it returns an empty item — so every row came back `{}` and the first subscript raised. Present since M5. Found while reading the ledger to diagnose V12-3. | Projected from `ledger.writer.PARTITION_KEY`, which is now named once and used by `_to_item`, `_from_item` and this scan. A test fakes the DynamoDB **client** rather than the function, and builds its rows with the writer's own serialiser, so the two files cannot disagree about the attribute again. |
+
+**Every existing test of this code monkeypatched the function that had the bug.** `verify_ledger` has three good tests — per-saga chains, tampering, ordering — and all three replace `ledger_entries` wholesale, which is the only place the defect could live. It is the same shape as [V11-3](#2026-07-28--v11-3--a-saga-behind-an-http-request-and-a-comment-that-said-so), where the API tests mocked `_invoke_saga` and made synchronous and asynchronous invocation indistinguishable: **a mock placed at the seam you are testing tests the mock.** The fix in both cases was to fake one layer lower.
+
+Two vocabularies meet in this table — snake_case key attributes and camelCase body keys — and nothing marked the boundary. Naming the key once is the cheap half; the durable half is that the test now derives its rows from the writer.
+
 1. Read a doc claim as an adversary: *what would make this false, and could the
    named control detect it?*
 2. If the control can't go red, that's a finding — record it here with the fix and

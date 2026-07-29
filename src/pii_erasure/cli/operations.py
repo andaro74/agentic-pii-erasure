@@ -30,6 +30,7 @@ from typing import Any
 from pii_erasure.approval.presenter import baseline_from_history, present, render_text
 from pii_erasure.ledger.chain import LedgerEntry
 from pii_erasure.ledger.verify import verify_chain
+from pii_erasure.ledger.writer import PARTITION_KEY as LEDGER_PARTITION_KEY
 from pii_erasure.manifest.models import Manifest
 
 #: How long the walkthrough waits for a phase to settle before calling it stuck. Dev
@@ -268,11 +269,16 @@ def ledger_entries(saga_id: str | None = None) -> list[LedgerEntry]:
     if saga_id:
         return writer.entries(saga_id)
 
+    # `saga_id`, not `sagaId`: the DynamoDB attribute is the table's partition key and is
+    # snake_case (`ledger/writer.py::_to_item`). `sagaId` is a camelCase key inside the
+    # digested *body*, and projecting it returned an empty item for every row — so this
+    # command raised `KeyError: 'sagaId'` on its first result and had never once run
+    # (V12-4). Every test of `verify_ledger` monkeypatched this function away.
     paginator = boto3.client("dynamodb").get_paginator("scan")
     saga_ids: set[str] = set()
-    for page in paginator.paginate(TableName=table, ProjectionExpression="sagaId"):
+    for page in paginator.paginate(TableName=table, ProjectionExpression=LEDGER_PARTITION_KEY):
         for item in page.get("Items", []):
-            saga_ids.add(item["sagaId"]["S"])
+            saga_ids.add(item[LEDGER_PARTITION_KEY]["S"])
     entries: list[LedgerEntry] = []
     for found in sorted(saga_ids):
         entries.extend(writer.entries(found))

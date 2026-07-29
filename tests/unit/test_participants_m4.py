@@ -41,6 +41,7 @@ from pii_erasure.participants.analytics_lake.handler import (
 )
 from pii_erasure.participants.billing_ledger.handler import (
     _DELETE_ORDER,
+    _FK_PARENTS,
     BillingLedger,
     DatabaseResumeTimeoutError,
     execute_with_resume,
@@ -480,8 +481,23 @@ def test_notify_suppression_verify_reports_the_surviving_entry(ses: Any) -> None
 # ─── billing-ledger ───────────────────────────────────────────────────────────────────
 
 
+class _ForeignKeyViolationError(RuntimeError):
+    """What PostgreSQL raises, in the one shape this fake is qualified to imitate."""
+
+
 class _FakeDataApi:
-    """The RDS Data API is not modelled by moto. Counts and holds are scripted."""
+    """The RDS Data API is not modelled by moto. Counts and holds are scripted.
+
+    **It models the foreign keys, and only because the real database taught it to.** The
+    scoped-hold test used to assert that `public.customers` was deleted while
+    `public.invoices` was retained under a hold, and passed — the fake had no constraints,
+    so it certified a statement Aurora refuses with `ON DELETE RESTRICT` (V12-3, found by
+    `make chaos` against a real cluster). A fake that cannot fail the way the service
+    fails is not testing the handler, it is agreeing with it.
+
+    Nothing else about PostgreSQL is imitated here, deliberately. This one rule is in the
+    schema this participant owns, three lines from the statements it runs.
+    """
 
     def __init__(
         self, counts: dict[str, int], holds: list[tuple[str, str, str, str, str | None]]
@@ -513,6 +529,12 @@ class _FakeDataApi:
             return {"records": [[{"longValue": self.counts[table]}]]}
         if sql.startswith("DELETE"):
             table = next(t for t in self.counts if t.split(".")[-1] in sql)
+            for child, parents in _FK_PARENTS.items():
+                if table in parents and self.counts.get(child):
+                    raise _ForeignKeyViolationError(
+                        f'update or delete on table "{table.split(".")[-1]}" violates '
+                        f'foreign key constraint on table "{child.split(".")[-1]}"'
+                    )
             deleted = self.counts[table]
             self.counts[table] = 0
             return {"numberOfRecordsUpdated": deleted}
@@ -549,9 +571,17 @@ def test_a_live_hold_refuses_the_delete_outright() -> None:
     assert not [s for s in fake.statements if s.startswith("DELETE")]
 
 
-def test_a_scoped_hold_retains_only_its_scope() -> None:
+def test_a_scoped_hold_retains_its_scope_and_everything_that_scope_depends_on() -> None:
     """Treating a scoped hold as subject-wide would silently under-delete — a recall
-    failure wearing a compliance costume."""
+    failure wearing a compliance costume. Treating it as *only* its scope under-retains
+    in the other direction, and the database says so.
+
+    A hold over `public.invoices` cannot permit deleting `public.customers`: the invoices
+    reference it `ON DELETE RESTRICT`, so the statement is refused (V12-3), and even if it
+    were not, the retained evidence would no longer say whose it is. `public.invoice_lines`
+    is a child of the held table, depends on nothing that survives, and is still erased —
+    the scope stays literal in the direction where literal is safe.
+    """
     holds = [("hold-1", "Ct. of Appeal", "public.invoices", "GDPR Art.17(3)(e)", None)]
     participant, fake = _ledger(holds=holds)
 
@@ -559,10 +589,53 @@ def test_a_scoped_hold_retains_only_its_scope() -> None:
 
     assert response.outcome is Outcome.PARTIAL
     retained = {r.locator for r in response.residual}
-    # `public.invoice_lines` starts with `public.invoices`? No — prefix matching is on the
-    # hold scope, and this asserts the two invoice tables are not conflated.
-    assert retained == {"public.invoices"}
-    assert any("customers" in s for s in fake.statements if s.startswith("DELETE"))
+    # `public.invoice_lines` does not start with `public.invoices` — prefix matching is on
+    # the hold scope, and this asserts the two invoice tables are not conflated.
+    assert retained == {"public.invoices", "public.customers"}
+    deleted = [s for s in fake.statements if s.startswith("DELETE")]
+    assert deleted, "the unheld child must still be erased"
+    assert not any("customers" in s for s in deleted)
+    assert all("invoice_lines" in s for s in deleted)
+
+
+def test_a_hold_on_the_leaf_table_retains_the_whole_chain_and_still_discloses_honestly() -> None:
+    """`public.invoice_lines` is at the bottom of the chain, so holding it retains
+    everything above it — and the response must not therefore claim the court held
+    everything.
+
+    `REFUSED` is reserved for a hold whose *own scope* covers every table; it routes to
+    the DLQ and the `stuck` gate, which is the right answer for "a court froze this
+    system" and the wrong one for "one table was frozen and the keys point upwards".
+    This is a full retention, disclosed as one.
+    """
+    holds = [("hold-1", "Ct. of Appeal", "public.invoice_lines", "GDPR Art.17(3)(e)", None)]
+    participant, fake = _ledger(holds=holds)
+
+    response = participant.hard_delete(_hard())
+
+    assert response.outcome is Outcome.PARTIAL
+    assert response.affected == 0
+    assert {r.locator for r in response.residual} == set(_DELETE_ORDER)
+    assert not [s for s in fake.statements if s.startswith("DELETE")]
+    reasons = {r.locator: r.reason for r in response.residual}
+    assert "hold-1" in reasons["public.invoice_lines"]
+    assert "hold-1" not in reasons["public.customers"]
+
+
+def test_the_reason_never_claims_a_court_named_a_table_it_did_not() -> None:
+    """The two retentions are disclosed as the two different facts they are: one table is
+    held, the other is retained because the held one points at it."""
+    holds = [("hold-1", "Ct. of Appeal", "public.invoices", "GDPR Art.17(3)(e)", None)]
+    participant, _ = _ledger(holds=holds)
+
+    reasons = {r.locator: r.reason for r in participant.hard_delete(_hard()).residual}
+
+    assert "hold-1" in reasons["public.invoices"]
+    assert "Art. 17(3)(e)" in reasons["public.invoices"]
+    assert "hold-1" not in reasons["public.customers"], (
+        "customers is not under the hold — saying so would be a false disclosure"
+    )
+    assert "public.invoices" in reasons["public.customers"]
 
 
 def test_holds_are_re_read_at_execution_not_trusted_from_the_plan() -> None:

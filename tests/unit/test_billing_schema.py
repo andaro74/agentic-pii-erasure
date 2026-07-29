@@ -108,6 +108,30 @@ def test_foreign_keys_restrict_rather_than_cascade() -> None:
     assert _DDL.count("on delete restrict") == 2, "invoices → customers, lines → invoices"
 
 
+def test_the_fk_parent_map_is_the_schemas_own_references() -> None:
+    """`_FK_PARENTS` decides what a legal hold drags into retention with it (V12-3), so a
+    hand-maintained copy of the schema's `REFERENCES` clauses is exactly the kind of
+    second source of truth that goes stale silently — and the failure mode is a refused
+    `DELETE` in phase 3, where nothing compensates.
+
+    Derived from the DDL here, so adding a foreign key or renaming a table turns this red
+    rather than turning a deployed erasure red.
+    """
+    declared: dict[str, tuple[str, ...]] = {}
+    for statement in SCHEMA_STATEMENTS:
+        created = re.search(r"create table if not exists public\.([a-z_]+)", statement.lower())
+        if created is None:
+            continue
+        parents = tuple(
+            f"public.{name}"
+            for name in re.findall(r"references\s+public\.([a-z_]+)", statement.lower())
+        )
+        if parents:
+            declared[f"public.{created.group(1)}"] = parents
+
+    assert declared == handler._FK_PARENTS
+
+
 def test_the_schema_is_idempotent() -> None:
     """`make seed` is re-run constantly (V8-8); applying the schema must converge too."""
     for statement in SCHEMA_STATEMENTS:

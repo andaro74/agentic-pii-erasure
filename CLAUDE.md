@@ -167,7 +167,7 @@ Docs live in `docs/`, CDK in `infra/`, Cedar policies in `policies/cedar/`, fabr
 - **Line length 100**, ruff for lint and format. `make fmt` before committing.
 - Participants inherit from `participants/_base`. If you find yourself copying verb plumbing, extend the base instead.
 - Conformance tests are parameterised over the participant registry, so a new participant is automatically covered — do not write bespoke conformance tests per participant.
-- **`moto` is for unit-testing handler logic only.** It is never a gate. The failures that matter — delete markers, GSI lag, Object Lock, KMS deletion windows — are precisely the ones it does not model.
+- **`moto` is for unit-testing handler logic only.** It is never a gate. The failures that matter — delete markers, GSI lag, Object Lock, KMS deletion windows, **foreign keys** — are precisely the ones it does not model. The hand-written fakes are held to the same standard: when a deployed run shows a service refusing something a fake accepted, teach the fake that one rule (V12-3). A fake that cannot fail the way the service fails is not testing the handler, it is agreeing with it.
 - **No Lambda gets a VPC configuration.** Aurora is reached via the RDS Data API for exactly this reason. A `cdk synth` assertion enforces it.
 
 ## Commands

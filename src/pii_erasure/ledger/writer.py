@@ -24,6 +24,12 @@ from pii_erasure.observability.redact import scrub_mapping
 
 _MAX_APPEND_RACES = 5
 
+#: The table's key attributes, snake_case and named once. Everything a *body* carries is
+#: camelCase (`sagaId`), and the two vocabularies meeting in one table is how an operator
+#: command came to project an attribute that does not exist (V12-4).
+PARTITION_KEY = "saga_id"
+SORT_KEY = "seq"
+
 
 class LedgerAppendError(RuntimeError):
     """The append could not claim a sequence slot after bounded retries."""
@@ -107,8 +113,8 @@ def _now() -> str:
 
 def _to_item(entry: LedgerEntry) -> dict[str, Any]:
     return {
-        "saga_id": {"S": entry.saga_id},
-        "seq": {"N": str(entry.seq)},
+        PARTITION_KEY: {"S": entry.saga_id},
+        SORT_KEY: {"N": str(entry.seq)},
         "event_type": {"S": entry.event_type},
         "at": {"S": entry.at},
         "body": {"S": json.dumps(entry.body, sort_keys=True, ensure_ascii=False)},
@@ -119,8 +125,8 @@ def _to_item(entry: LedgerEntry) -> dict[str, Any]:
 
 def _from_item(item: dict[str, Any]) -> LedgerEntry:
     return LedgerEntry(
-        saga_id=item["saga_id"]["S"],
-        seq=int(item["seq"]["N"]),
+        saga_id=item[PARTITION_KEY]["S"],
+        seq=int(item[SORT_KEY]["N"]),
         event_type=item["event_type"]["S"],
         at=item["at"]["S"],
         body=json.loads(item["body"]["S"]),

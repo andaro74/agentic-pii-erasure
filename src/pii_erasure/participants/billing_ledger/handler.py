@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import os
 import time
+from collections.abc import Sequence
 from typing import Any
 
 import boto3
@@ -92,10 +93,47 @@ _DELETE_SQL: dict[str, str] = {
     ),
 }
 
+#: Foreign-key parents, from `schema.py`: `invoices.subject_ref` REFERENCES `customers`,
+#: `invoice_lines.invoice_id` REFERENCES `invoices`, both `ON DELETE RESTRICT`.
+#:
+#: Ordering alone is enough when everything is deletable — children first and the
+#: constraints are satisfied. It is **not** enough when a hold retains a table partway
+#: up the chain: keeping `public.invoices` while deleting `public.customers` orphans the
+#: retained rows, and PostgreSQL refuses the statement outright (V12-3). So a retained
+#: table drags its parents into retention with it.
+#:
+#: This is the legally correct answer as well as the mechanically required one. Invoices
+#: frozen for litigation are evidence about a customer; deleting the customer would leave
+#: evidence that no longer says whose it is.
+_FK_PARENTS: dict[str, tuple[str, ...]] = {
+    "public.invoice_lines": ("public.invoices",),
+    "public.invoices": ("public.customers",),
+}
+
 _HOLDS_SQL = (
     "SELECT hold_id, authority, scope, basis, expires_at FROM public.legal_holds "
     "WHERE subject_ref = :subject_ref"
 )
+
+
+def _retained_under(holds: Sequence[Hold]) -> tuple[frozenset[str], frozenset[str]]:
+    """``(held_directly, retained_transitively)`` — the closure of the hold's scope over
+    foreign keys.
+
+    Kept separate in the return value because the two are disclosed differently: one is
+    retained *under* a legal hold, the other *because of* one. Telling an approver that
+    `public.customers` is under a court order when it is not would be its own dishonesty.
+    """
+    directly = frozenset(table for table in _DELETE_ORDER if blocks(holds, table))
+    retained: set[str] = set()
+    frontier = list(directly)
+    while frontier:
+        for parent in _FK_PARENTS.get(frontier.pop(), ()):
+            if parent not in directly and parent not in retained:
+                retained.add(parent)
+                frontier.append(parent)
+    return directly, frozenset(retained)
+
 
 _MARK_SQL = "UPDATE public.invoices SET pending_delete = :pending WHERE subject_ref = :subject_ref"
 
@@ -236,14 +274,25 @@ class BillingLedger(Participant):
         # first moment that reflects the window's end (§5.3).
         holds = self._holds(request.subject_ref)
         counts = self._counts(request.subject_ref)
-        held = [table for table in _DELETE_ORDER if blocks(holds, table) and counts.get(table)]
+        directly, transitively = _retained_under(holds)
+        held = [table for table in _DELETE_ORDER if table in directly and counts.get(table)]
+        carried = [table for table in _DELETE_ORDER if table in transitively and counts.get(table)]
         deletable = [
-            table for table in _DELETE_ORDER if not blocks(holds, table) and counts.get(table)
+            table
+            for table in _DELETE_ORDER
+            if table not in directly and table not in transitively and counts.get(table)
         ]
 
-        if held and not deletable:
-            # An unconditional veto. Nothing was touched, and the response says so rather
-            # than reporting a successful erasure of zero rows.
+        if held and not deletable and not carried:
+            # An unconditional veto: the hold's own scope covers every table. Nothing was
+            # touched, and the response says so rather than reporting a successful erasure
+            # of zero rows.
+            #
+            # `not carried` is what keeps this branch meaning what it says. A hold over
+            # `public.invoice_lines` alone retains the whole chain by reference (V12-3),
+            # which would otherwise land here and report a court order over `customers`
+            # that no court wrote. That case falls through to PARTIAL below with
+            # `affected=0` — an honest full retention, disclosed table by table.
             return MutationResponse(
                 system_id=self.system_id,
                 outcome=Outcome.REFUSED,
@@ -276,16 +325,41 @@ class BillingLedger(Participant):
                     locator=table,
                     count=counts[table],
                     classification=("PII", "FINANCIAL"),
-                    reason=(
-                        "Retained under a live legal hold "
-                        f"({', '.join(sorted(h.hold_id for h in holds if blocks([h], table)))}). "
-                        "GDPR Art. 17(3)(e) makes retention lawful where it is necessary "
-                        "for the establishment or defence of legal claims."
-                    ),
+                    reason=self._retention_reason(table, holds, held),
                 )
-                for table in held
+                for table in held + carried
             ),
-            evidence=receipt_evidence({"deletedFrom": deletable, "retained": held}),
+            evidence=receipt_evidence(
+                {"deletedFrom": deletable, "retained": held, "retainedByReference": carried}
+            ),
+        )
+
+    @staticmethod
+    def _retention_reason(table: str, holds: Sequence[Hold], held: Sequence[str]) -> str:
+        """Why this table survived — in the approver's words, not the schema's.
+
+        Two different sentences, because they are two different facts. A table inside the
+        hold's scope is retained *under* a court's order; a table outside it that the held
+        one depends on is retained *because of* that order. Giving both the same reason
+        would tell an approver that a customer record is under a legal hold it does not
+        name, which is the sort of small dishonesty that makes a whole disclosure worth
+        less than it looks.
+        """
+        covering = sorted(hold.hold_id for hold in holds if blocks([hold], table))
+        if covering:
+            return (
+                f"Retained under a live legal hold ({', '.join(covering)}). "
+                "GDPR Art. 17(3)(e) makes retention lawful where it is necessary for the "
+                "establishment or defence of legal claims."
+            )
+        dependents = sorted(
+            child for child in held if table in _FK_PARENTS.get(child, ())
+        ) or sorted(held)
+        return (
+            f"Not itself held, but retained because {', '.join(dependents)} is and "
+            "references it. Deleting it would orphan rows a court has ordered kept — the "
+            "foreign key refuses the statement, and the evidence would no longer say "
+            "whose it is."
         )
 
     # ── Data API detail ──────────────────────────────────────────────────────────────

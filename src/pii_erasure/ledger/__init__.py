@@ -6,10 +6,11 @@ and must survive a third.
 
 from pii_erasure.ledger.chain import GENESIS_DIGEST, ChainError, LedgerEntry, entry_digest
 from pii_erasure.ledger.verify import verify_chain
-from pii_erasure.ledger.writer import LedgerWriter
+from pii_erasure.ledger.writer import PARTITION_KEY, LedgerWriter
 
 __all__ = [
     "GENESIS_DIGEST",
+    "PARTITION_KEY",
     "ChainError",
     "LedgerEntry",
     "LedgerWriter",

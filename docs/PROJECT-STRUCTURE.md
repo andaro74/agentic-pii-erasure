@@ -295,7 +295,7 @@ tests/
                     lives in two files, not one, and neither reimplements the other.
 ```
 
-`moto` covers participant handler *logic* — argument shaping, ordering, residual construction — so the fast loop stays fast. It is never a substitute for a gate: the interesting failures are delete markers, GSI lag, Object Lock, and KMS deletion windows, and a mock reproduces none of them.
+`moto` covers participant handler *logic* — argument shaping, ordering, residual construction — so the fast loop stays fast. It is never a substitute for a gate: the interesting failures are delete markers, GSI lag, Object Lock, KMS deletion windows, and foreign keys, and a mock reproduces none of them. When a deployed run shows a service refusing what a fake accepted, the fake learns that one rule — `_FakeDataApi` now raises on deleting a parent whose child still has rows, because Aurora did (V12-3).
 
 Chaos and durability cases worth keeping green:
 

@@ -263,12 +263,20 @@ def test_a_hold_filed_after_approval_stops_its_scope_and_nothing_else(
         assert by_system["billing-ledger"]["outcome"] == "PARTIAL", (
             "a participant that kept rows under a hold must say so — invariant 7"
         )
-        assert by_system["billing-ledger"]["residualCount"] >= 1
+        # Two residuals: the held table, and the parent it references (V12-3).
+        assert by_system["billing-ledger"]["residualCount"] == 2
 
-        # ── from outside the saga: the hold's scope survived, the rest did not ──
+        # ── from outside the saga: what a hold over one table actually retains ──
         counts = _billing_counts(rig, subject)
         assert counts["public.invoices"] > 0, "held rows must still be there"
-        assert counts["public.customers"] == 0, "unheld rows must be gone"
+        assert counts["public.customers"] > 0, (
+            "the held invoices reference this row ON DELETE RESTRICT — deleting it is "
+            "refused by the database, and would orphan evidence a court ordered kept"
+        )
+        assert counts["public.invoice_lines"] == 0, (
+            "a child of the held table that nothing surviving depends on is still erased "
+            "— the hold's scope stays literal where literal is the safe direction"
+        )
         assert blocks(_holds_in_aurora(rig, subject), "public.invoices")
 
         # A disclosed residual is a disclosure, not a failure: the T+0 verify let the
