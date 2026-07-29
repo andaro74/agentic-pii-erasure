@@ -8,6 +8,6 @@ The governing question for every claim, test, gate, and doc statement: **"would 
 Sweep:
 1. Claims-vs-mechanism: for each assertion in docs or comments about what a test/gate/pin enforces, confirm the enforcing code exists and would fire.
 2. Doc drift: grep for names, paths, and framework vocabulary that no longer match reality (superseded ADRs and VALIDATION.md are the only legitimate holders of stale vocabulary).
-3. Structural: all relative markdown links resolve; embedded diagrams in ARCHITECTURE.md remain byte-identical to docs/diagrams/ sources; Mermaid blocks balance.
+3. Structural: all relative markdown links resolve; embedded diagrams in ARCHITECTURE.md match their `docs/diagrams/` sources apart from the `%% Source of truth:` provenance line the source carries and the embedded copy drops; Mermaid blocks balance. **These three now have mechanisms** — `test_doc_links.py` and `test_diagrams_match_sources.py` — so read them as "confirm the tests still cover what this line claims", not as a manual sweep. The diagram wording used to say *byte-identical*, which was stricter than the convention and would have failed on correct files (V12-5).
 4. Executable: run `make check` and every "done when" of milestones marked complete in docs/ROADMAP.md.
 5. Append a dated findings table (ID · severity · finding · resolution) to docs/VALIDATION.md — including "no findings" if true, dated. Fix what you find in the same session where feasible; otherwise record it honestly as open.

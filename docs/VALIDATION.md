@@ -1344,6 +1344,17 @@ One consequence worth naming: the closure makes a hold over the *leaf* table ret
 
 Two vocabularies meet in this table — snake_case key attributes and camelCase body keys — and nothing marked the boundary. Naming the key once is the cheap half; the durable half is that the test now derives its rows from the writer.
 
+### 2026-07-29 · V12-5 — the sweep's own structural check had no mechanism, and its wording was wrong
+
+| ID | Severity | Finding | Resolution |
+|---|---|---|---|
+| **V12-5a** | **Medium** | **A stale edge label survived ADR-027 in both copies of a diagram.** `Recheck --> Blocked: new hold found` describes the behaviour ADR-027 replaced — a hold found at recheck now blocks only when it covers everything actionable, and otherwise phase 3 proceeds. Present in `docs/diagrams/02-three-phase-saga.mermaid` *and* in the copy embedded in ARCHITECTURE.md, which is the one a reader sees. Nothing compared either against the behaviour or against the other. | Both edges corrected in both files, and the `Recheck` note now states the scope rule. `tests/unit/test_diagrams_match_sources.py` asserts every embedded block matches a source, and that a source is either embedded verbatim or linked — editing one copy alone now fails two tests. |
+| **V12-5b** | **Low** | **`/validate` step 3 claimed a check nothing performed**, and stated it more strictly than the convention: *"embedded diagrams remain **byte-identical** to docs/diagrams/ sources"*. Each source opens with a `%% Source of truth: ARCHITECTURE.md §N` line that the embedded copy drops — correctly, since inside ARCHITECTURE.md it would point at itself. Three of the four diagrams differed by exactly that line. | The claim now describes the real rule and names the two tests that enforce it. |
+
+**The wrong claim produced a wrong test, and the test caught the claim.** Encoding "byte-identical" literally failed on four correct files; the diff showed a one-line, deliberate difference. Had that test been written at the same time as the sentence, the sentence would have been right — which is the argument for mechanisms over prose stated more precisely than usual: **a control you implement tells you when you have described it wrong, and prose never does.**
+
+Two smaller notes from the same read. `04-recovery-semantics.mermaid` is deliberately not embedded — linked from the README and ADR-002, as this file's [first pass entry](#2026-07-24--doc-completeness--build-tooling-pass-pre-m0) records — so the test accepts embedded *or* linked and rejects only a diagram with no reader. And `seeds/meridian.json`'s claim that the litigation fixture proves *"holds are an unconditional veto, **and they are scoped**"* is, as of ADR-027 and V12-3, true for the first time; V11-8 flagged it as half-demonstrated and it can now be read at face value.
+
 1. Read a doc claim as an adversary: *what would make this false, and could the
    named control detect it?*
 2. If the control can't go red, that's a finding — record it here with the fix and

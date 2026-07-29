@@ -38,7 +38,7 @@ stateDiagram-v2
     }
 
     Intake --> P1
-    P1 --> Blocked: hold blocks all
+    P1 --> Blocked: hold covers everything actionable
     P1 --> P2: plan approved for soft phase
     P2 --> Compensate: any participant fails
     Compensate --> Failed: restore complete
@@ -66,9 +66,13 @@ stateDiagram-v2
         A hold placed during the grace
         window is a compliance defect
         if the phase 1 result is cached.
+        A hold blocks its SCOPE, not the
+        subject (ADR-027): phase 3 runs
+        for what it never named, and the
+        held participant returns PARTIAL.
     end note
-    Recheck --> Blocked: new hold found
-    Recheck --> P3: still clear
+    Recheck --> Blocked: new hold covers everything
+    Recheck --> P3: clear, or held only in part
 
     P3 --> Verify: all applied
     P3 --> Stuck: participant unrecoverable

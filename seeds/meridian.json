@@ -51,7 +51,7 @@
           "scope": "public.invoices",
           "basis": "GDPR Art.17(3)(e)",
           "expiresAt": null,
-          "$comment": "Scoped to one table on purpose. The uploads and profile items are still erased; treating a scoped hold as subject-wide would silently under-delete."
+          "$comment": "Scoped to one table on purpose. The uploads and profile items are still erased; treating a scoped hold as subject-wide would silently under-delete (ADR-027). Inside billing-ledger the hold retains public.invoices AND public.customers, which the invoices reference ON DELETE RESTRICT - a hold retains what its scope cannot survive without (V12-3). public.invoice_lines is erased: nothing surviving depends on it."
         }
       ]
     },
