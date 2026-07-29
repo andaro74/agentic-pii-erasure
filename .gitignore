@@ -240,3 +240,7 @@ infra/build/runtime/*
 # is untracked AND unignored, so `git add -A` commits 131 MB of vendored langchain
 # and ruff lints third-party source. `tests/unit/test_lambda_asset_determinism.py`
 # asserts every declared asset has all three (V10-5).
+
+# The upgrade canary hands a live thread id between two processes (ADR-016).
+# Committing one would make a later canary resume a thread from another stack.
+.canary-state.json

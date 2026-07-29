@@ -29,7 +29,7 @@ dependencies = [
   # backed — until then, only these two direct pins are protected.
   "langgraph==1.2.9",
   "langgraph-checkpoint-aws==1.2.0",       # DynamoDBSaver + S3 offload. ADR-016.
-  "langchain>=1.0,<2",                     # agents + middleware
+  "langchain>=1.0,<2",                     # the Bedrock model client (no agents: ADR-026)
   "langchain-aws>=1.0,<2",                 # ChatBedrockConverse
   "langchain-mcp-adapters>=0.3,<1",        # AgentCore Gateway MCP tools as LangChain tools
   "mcp>=1.2",                              # MCP client for the Gateway endpoint
@@ -142,6 +142,7 @@ markers = [
   "conformance: participant contract conformance suite (needs a deployed stack)",
   "integration: full saga run (needs a deployed stack)",
   "chaos: failure-injection suite (needs a deployed stack)",
+  "canary: upgrade canary — needs a deployed stack AND a CANARY_STAGE (ADR-016)",
   "adversarial: prompt-injection corpus (needs a deployed stack)",
   "upgrade_canary: pause/resume across a framework version bump (ADR-016)",
 ]

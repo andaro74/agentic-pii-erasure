@@ -18,11 +18,12 @@ PYTEST := $(VENV_BIN)/pytest
 # Not a silencing guard.
 LINT_DIRS := src tests $(wildcard infra evals seeds scripts)
 
-# Milestone-gated targets: stages that haven't been built yet print "⏳ lands
-# at Mx" instead of failing, so `make check` and CI are green from commit zero.
-# The guard is the *existence of the stage's entry file* — the moment a
-# milestone lands, its gate becomes mandatory automatically. Never re-add a
-# guard to silence a failing gate (docs/ROADMAP.md, rule 4).
+# Milestone-gated targets used to print "⏳ lands at Mx" instead of failing, so
+# `make check` and CI were green from commit zero. **Every stage has now landed and
+# the guards are gone** (M9's "every gate now mandatory"). They were correct while
+# the files were unwritten and a hazard the moment they were not: delete a suite and
+# its gate printed a milestone note and exited 0. Never re-add one to silence a
+# failing gate (docs/ROADMAP.md, rule 4).
 #
 # TWO KINDS OF GATE (docs/ROADMAP.md). There is no local mode — ADR-017.
 #   HERMETIC : lint, test, policy-test, synth. No AWS account. This is `make check`.
@@ -73,9 +74,7 @@ test: ## Unit tests — contract, reducers, handler logic (moto), CDK IAM assert
 
 .PHONY: policy-test
 policy-test: ## Cedar policy tests + engine/Cedar divergence test (M6)
-	@if [ -f tests/unit/test_policies.py ]; then \
-		$(PYTEST) tests/unit/test_policies.py; \
-	else echo "⏳ lands at M6 — docs/ROADMAP.md"; fi
+	$(PYTEST) tests/unit/test_policies.py
 
 # cdk.json says "python app.py" for humans with an activated venv; make always
 # passes the venv interpreter explicitly so synth works from a bare shell.
@@ -109,9 +108,7 @@ REQUIRE_REGION = : $${AWS_REGION:?is unset — set it in .env (see .env.example)
 
 .PHONY: synth
 synth: ## CDK synth. Free, no credentials. IAM assertions live in tests/unit. (M0)
-	@if [ -f infra/app.py ]; then \
-		cd infra && $(CDK) synth --quiet --app '$(CDK_APP)'; \
-	else echo "⏳ lands at M0 — docs/ROADMAP.md"; fi
+	cd infra && $(CDK) synth --quiet --app '$(CDK_APP)'
 
 .PHONY: check
 check: lint test policy-test synth ## What CI runs on every commit. HERMETIC — no AWS account.
@@ -308,6 +305,12 @@ inspect: ## Dump one participant's state. Usage: make inspect P=compliance-archi
 	$(PY) -m pii_erasure.cli.main inspect --participant $(P)
 
 # ─── Running — DEPLOYED ───────────────────────────────────────────────────────
+# Every target below ran behind an `if <file exists>` guard printing "⏳ lands at Mx"
+# until M9. The guards were correct while the files were unwritten and became a hazard
+# the moment they were not: delete a suite and its gate printed a milestone note and
+# EXITED 0. A gate that cannot fail is this repo's oldest defect class (VALIDATION
+# baseline #2), so with every suite written they are gone — a missing file is now a
+# missing file, loudly.
 .PHONY: walkthrough
 walkthrough: ## Full arc against the dev stack: discover → soft → pause → hard → cert (M8)
 	@# .env carries PII_ERASURE_OPERATOR_USER/PASSWORD, and approval has no bypass — so
@@ -345,43 +348,31 @@ conformance: package synth ## 5 verbs x 8 participants, against the deployed sta
 	@# current. Synthesising from a stale staging directory produces a hash that matches
 	@# the deployed stack and reports "up to date" while testing yesterday's bytes —
 	@# which is exactly how V7-2 wasted a deploy-and-test cycle.
-	@if ls tests/conformance/test_*.py >/dev/null 2>&1; then \
-		$(PYTEST) tests/conformance -m conformance; \
-	else echo "⏳ lands at M2 — docs/ROADMAP.md"; fi
+	$(PYTEST) tests/conformance -m conformance
 
 .PHONY: integration
 integration: package synth ## Deployed: manifest signing vs the real CMK (M3) + full saga (M5)
 	@# `package synth` for the same reason as conformance: the suite's preflight
 	@# compares working-tree asset hashes against the deployed participants AND saga
 	@# stacks, and that comparison is only meaningful if both sides are current (V7-2).
-	@if ls tests/integration/test_*.py >/dev/null 2>&1; then \
-		$(PYTEST) tests/integration -m integration; \
-	else echo "⏳ lands at M5 — docs/ROADMAP.md"; fi
+	$(PYTEST) tests/integration -m integration
 
 .PHONY: chaos
 chaos: ## Participant failures, duplicate wakes, resurrection at T+7 (M9)
-	@if ls tests/integration/test_chaos*.py >/dev/null 2>&1; then \
-		$(PYTEST) tests/integration -m chaos; \
-	else echo "⏳ lands at M9 — docs/ROADMAP.md"; fi
+	$(PYTEST) tests/integration -m chaos
 
 .PHONY: eval
 eval: ## Discovery recall vs generated ground truth. Gate: recall == 1.0 (M7)
-	@if [ -f evals/run.py ]; then \
-		$(PY) -m evals.run --suite discovery --fail-under-recall 1.0; \
-	else echo "⏳ lands at M7 — docs/ROADMAP.md"; fi
+	$(PY) -m evals.run --suite discovery --fail-under-recall 1.0
 
 .PHONY: eval-adversarial
 eval-adversarial: ## Injection corpus. Pass = tool absent or policy denied. (M7)
-	@if [ -f evals/run.py ]; then \
-		$(PY) -m evals.run --suite adversarial; \
-	else echo "⏳ lands at M7 — docs/ROADMAP.md"; fi
+	$(PY) -m evals.run --suite adversarial
 
 # ─── Release gates (ADR-016) ──────────────────────────────────────────────────
 .PHONY: upgrade-canary
 upgrade-canary: ## REQUIRED before bumping langgraph OR langgraph-checkpoint-aws (M9)
-	@if [ -f tests/integration/test_upgrade_canary.py ]; then \
-		bash scripts/upgrade_canary.sh; \
-	else echo "⏳ lands at M9 — docs/ROADMAP.md"; fi
+	bash scripts/upgrade_canary.sh
 
 # ─── Misc ─────────────────────────────────────────────────────────────────────
 .PHONY: diagrams
