@@ -62,6 +62,28 @@ def test_the_script_refuses_one_pin_without_the_other() -> None:
     assert "invariant 9" in source
 
 
+def test_the_summary_keys_off_whether_a_pin_actually_moved() -> None:
+    """The two packages release independently, so "target equals current" is a normal,
+    honest case — `langgraph-checkpoint-aws` had no newer release than its pin when this
+    was written. What must never happen is a run reporting a canaried upgrade for a pin
+    that never moved, which is what keying the summary off *argument presence* did.
+    """
+    source = SCRIPT.read_text(encoding="utf-8")
+    assert 'if [ "$MOVED_ANY" = no ]' in source, (
+        "the summary must branch on whether a pin moved, not on whether one was passed"
+    )
+    assert "already current" in source, "a pin with no newer release must be labelled as such"
+
+
+def test_the_hermetic_gate_runs_on_the_new_versions_before_the_deploy() -> None:
+    """A new version that breaks an API we call should cost three unit failures, not a
+    deploy and then a mysterious resume failure. Order is the whole assertion."""
+    lines = SCRIPT.read_text(encoding="utf-8").splitlines()
+    check = next(i for i, line in enumerate(lines) if line.strip() == "make check")
+    deploy = next(i for i, line in enumerate(lines) if line.strip() == "make deploy-dev")
+    assert check < deploy, "the hermetic gate must run before the deploy it would invalidate"
+
+
 def test_the_pins_are_still_exact() -> None:
     """The thing the canary protects. `>=` here would mean a `pip install` could move
     the serializer under a paused saga with no canary run at all."""

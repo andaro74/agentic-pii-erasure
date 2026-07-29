@@ -50,6 +50,13 @@
 #   pause → redeploy → resume with the pins unchanged, which catches a broken harness
 #   without claiming to have canaried an upgrade.
 #
+#   **A target equal to the current pin is reported as "already current", not as an
+#   upgrade.** The two packages release independently, so the honest case where one has
+#   a newer version and the other does not is normal — and passing the current version
+#   for the second is how invariant 9's "both move together" is satisfied without
+#   inventing a release. What must never happen is a summary claiming both were canaried
+#   when one never moved.
+#
 # ON FAILURE
 #
 #   pyproject.toml and requirements.lock are restored, and the exit is non-zero. The
@@ -90,13 +97,26 @@ current_pin() { grep -oE "^  \"$1==[0-9][^\"]*\"" "$PYPROJECT" | grep -oE '[0-9]
 FROM_LANGGRAPH="$(current_pin langgraph)"
 FROM_CHECKPOINT="$(current_pin langgraph-checkpoint-aws)"
 
+moved() { [ -n "$2" ] && [ "$1" != "$2" ]; }
+MOVED_ANY=no
+if moved "$FROM_LANGGRAPH" "$TARGET_LANGGRAPH" || moved "$FROM_CHECKPOINT" "$TARGET_CHECKPOINT"; then
+  MOVED_ANY=yes
+fi
+
+describe_pin() { # name from to
+  if [ -z "$3" ]; then printf '   %-26s %s (unchanged)\n' "$1" "$2"
+  elif [ "$2" = "$3" ]; then printf '   %-26s %s (already current — nothing to canary)\n' "$1" "$2"
+  else printf '   %-26s %s  ->  %s\n' "$1" "$2" "$3"
+  fi
+}
+
 echo "── upgrade canary ────────────────────────────────────────────────"
-if [ -z "$TARGET_LANGGRAPH" ]; then
-  echo "   REHEARSAL — pins unchanged (langgraph $FROM_LANGGRAPH, checkpoint-aws $FROM_CHECKPOINT)."
-  echo "   This proves the harness works. It does NOT canary an upgrade."
-else
-  echo "   langgraph              $FROM_LANGGRAPH  ->  $TARGET_LANGGRAPH"
-  echo "   langgraph-checkpoint-aws  $FROM_CHECKPOINT  ->  $TARGET_CHECKPOINT"
+describe_pin langgraph "$FROM_LANGGRAPH" "$TARGET_LANGGRAPH"
+describe_pin langgraph-checkpoint-aws "$FROM_CHECKPOINT" "$TARGET_CHECKPOINT"
+if [ "$MOVED_ANY" = no ]; then
+  echo
+  echo "   REHEARSAL — no pin moves. This proves the harness works end to end."
+  echo "   It does NOT canary an upgrade, and the summary will say so."
 fi
 echo
 
@@ -120,6 +140,13 @@ if [ -n "$TARGET_LANGGRAPH" ]; then
   [ "$(current_pin langgraph-checkpoint-aws)" = "$TARGET_CHECKPOINT" ] || { echo "❌ the checkpoint pin did not move" >&2; exit 1; }
   make lock
   make install
+  # Hermetic first, and before the deploy. A new version that breaks an API we call
+  # would otherwise surface as a mysterious resume failure four minutes later, after a
+  # deploy paid for; `make check` turns that into three named unit failures for free.
+  # The pause has already happened, so the paused thread is still there to resume from
+  # once the pins are restored.
+  echo "   running the hermetic gate on the new versions before spending a deploy"
+  make check
 else
   echo "2. no bump (rehearsal)"
 fi
@@ -136,11 +163,20 @@ echo "4. resuming the paused thread"
 CANARY_STAGE=resume .venv/Scripts/python.exe -m pytest tests/integration/test_upgrade_canary.py -q -m canary
 echo
 
-if [ -z "$TARGET_LANGGRAPH" ]; then
-  echo "✅ canary REHEARSAL passed — harness works; no upgrade was tested."
+if [ "$MOVED_ANY" = no ]; then
+  echo "✅ canary REHEARSAL passed — harness works; NO upgrade was tested."
+  if [ -n "$TARGET_LANGGRAPH" ]; then
+    echo "   Both targets equalled the current pins. Nothing about a version change was"
+    echo "   proved, and this run must not be cited as a canary for one."
+  fi
 else
-  echo "✅ upgrade canary PASSED — langgraph $FROM_LANGGRAPH->$TARGET_LANGGRAPH, "\
-       "checkpoint-aws $FROM_CHECKPOINT->$TARGET_CHECKPOINT."
-  echo "   The pins in pyproject.toml are now the NEW versions. Commit them with this"
-  echo "   output, or run \`git checkout pyproject.toml requirements.lock\` to abandon."
+  echo "✅ upgrade canary PASSED — a saga paused on the old versions resumed on the new"
+  echo "   ones, from the same DynamoDB table, with a byte-identical manifest digest."
+  describe_pin langgraph "$FROM_LANGGRAPH" "$TARGET_LANGGRAPH"
+  describe_pin langgraph-checkpoint-aws "$FROM_CHECKPOINT" "$TARGET_CHECKPOINT"
+  echo
+  echo "   A pin marked 'already current' was NOT canaried — there was no newer release"
+  echo "   to canary. When one appears, it needs its own run (invariant 9)."
+  echo "   The pins in pyproject.toml are now the targets. Commit them with this output,"
+  echo "   or run \`git checkout pyproject.toml requirements.lock\` to abandon."
 fi
