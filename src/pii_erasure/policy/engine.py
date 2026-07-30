@@ -25,6 +25,7 @@ from typing import Any
 from cedarpy import Decision as CedarDecision
 from cedarpy import is_authorized, validate_policies
 
+from pii_erasure.observability.metrics import Dimensions, emit
 from pii_erasure.policy.decisions import Decision, PolicyDecision
 from pii_erasure.policy.schema import (
     NAMESPACE,
@@ -103,6 +104,7 @@ class PolicyEngine:
     def __init__(self, *, stage: str, gateway_arn: str, directory: Path | None = None) -> None:
         self._policies = load_policy_text(stage, gateway_arn=gateway_arn, directory=directory)
         self._gateway = gateway_arn
+        self._stage = stage
         self._schema = cedar_schema_json()
         errors = validate(self._policies)
         if errors:
@@ -149,6 +151,16 @@ class PolicyEngine:
         result = is_authorized(request, self._policies, entities, self._schema)
         allowed = result.decision == CedarDecision.Allow
         diagnostics = result.diagnostics
+        if not allowed:
+            # §10.1 alarms on a SPIKE, not on the count: a deny is the policy layer
+            # working, and Yuki's injection corpus produces them by design. The action is
+            # the dimension because "which verb is being refused" separates a
+            # misconfiguration from an attempt.
+            emit(
+                "policy.deny",
+                1,
+                Dimensions(stage=self._stage, plane="policy", system_id=action),
+            )
         return PolicyDecision(
             decision=Decision.ALLOW if allowed else Decision.DENY,
             action=action,

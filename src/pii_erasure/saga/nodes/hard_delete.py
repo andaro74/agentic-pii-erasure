@@ -38,6 +38,7 @@ from pii_erasure.approval.tokens import ApprovalTokenError
 from pii_erasure.contract import HardDeleteRequest, MutationResponse, Outcome, Verb
 from pii_erasure.contract.idempotency import idempotency_key
 from pii_erasure.manifest import Manifest, assert_digest
+from pii_erasure.observability.metrics import emit
 from pii_erasure.saga.deps import SagaDeps
 from pii_erasure.saga.invoker import ParticipantCallError
 from pii_erasure.saga.nodes._shared import digest_from_state, receipt_key
@@ -78,6 +79,11 @@ def make_hard_delete(deps: SagaDeps) -> Callable[[dict[str, Any]], dict[str, Any
                 event_type="PHASE3_ABORTED",
                 body={"reason": str(error)},
             )
+            # A security event, not a retryable fault (§8.3): either the approval token
+            # does not bind to this digest, or the stored manifest no longer re-digests to
+            # what was approved. Alarmed on ANY occurrence, which is why it is emitted
+            # here and not aggregated per saga.
+            emit("manifest.digest_mismatch", 1, deps.metric_dimensions("saga"))
             return {
                 "status": STATUS_ABORTED,
                 "errors": [{"node": "hard_delete", "error": type(error).__name__}],
@@ -135,6 +141,14 @@ def make_hard_delete(deps: SagaDeps) -> Callable[[dict[str, Any]], dict[str, Any
                 saga_id=manifest.saga_id,
                 event_type="PHASE3_STUCK",
                 body={"systemId": participant.system_id, "reason": reason},
+            )
+            # Dimensioned by participant: "which system is stuck" is the first question an
+            # operator asks, and the §10.1 alarm ("> 0 for 24h") is a statutory deadline
+            # forming rather than a transient fault.
+            emit(
+                "phase3.stuck_participants",
+                1,
+                deps.metric_dimensions("saga", system_id=participant.system_id),
             )
             answer = interrupt(
                 {

@@ -45,6 +45,7 @@ from evals.evaluators import (
     residual_honesty,
     tool_surface_minimality,
 )
+from pii_erasure.observability.metrics import Dimensions, emit
 
 REPO = Path(__file__).resolve().parents[1]
 GROUND_TRUTH = REPO / "evals" / "fixtures" / "ground-truth.json"
@@ -127,8 +128,24 @@ def assert_holds_are_measurable(truth: Mapping[str, Any]) -> None:
         )
 
 
+def _publish(verdicts: Sequence[Verdict]) -> None:
+    """Publish the §10.1 metrics this suite is the source of.
+
+    From the gate of record rather than from AgentCore Evaluations, which §11.2 makes the
+    post-merge drift monitor. Both watch the same number; only this one decides a merge, and
+    sourcing the metric from the monitor instead would make the dashboard lag the gate by a
+    deploy — exactly when someone is looking at it to decide whether a regression shipped.
+    """
+    dimensions = Dimensions(stage=os.environ.get("PII_ERASURE_STAGE", "dev"), plane="eval")
+    for verdict in verdicts:
+        recall = verdict.metrics.get("recall")
+        if verdict.name == "discovery_recall" and recall is not None:
+            emit("discovery.recall", recall, dimensions)
+
+
 def _report(verdicts: Sequence[Verdict], heading: str) -> bool:
     print(f"\n{heading}")
+    _publish(verdicts)
     for verdict in verdicts:
         print(verdict.line())
     failed = [v for v in verdicts if v.gating and not v.passed]

@@ -22,6 +22,7 @@ from typing import Any
 from langgraph.types import interrupt
 
 from pii_erasure.approval.gate import GATE_SWEEP, ResumeValidationError
+from pii_erasure.observability.metrics import emit
 from pii_erasure.saga.deps import SagaDeps
 from pii_erasure.saga.nodes._shared import manifest_from_state, verify_all_participants
 from pii_erasure.saga.state import STATUS_COMPLETED
@@ -69,6 +70,11 @@ def make_sweep(deps: SagaDeps) -> Callable[[dict[str, Any]], dict[str, Any]]:
             )
             receipts.update(swept)
             sweeps_done.append(reason)
+
+            # One per resurrected system, so the alarm's Sum answers "how much came back"
+            # rather than "how many sweeps noticed". Zero is emitted on a clean sweep for
+            # the same reason as in `verify`: an alarm cannot tell absent from fine.
+            emit("resurrection.detected", len(unexpected), deps.metric_dimensions("saga"))
 
             if unexpected:
                 deps.dead_letters.send(

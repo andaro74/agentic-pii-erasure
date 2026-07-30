@@ -33,11 +33,20 @@ from typing import Any
 from langgraph.types import Command
 
 from pii_erasure.observability.logging import configure_logging, get_logger
+from pii_erasure.observability.metrics import Dimensions, emit
 from pii_erasure.participants._base.idempotency import IdempotencyLog, ReplayInFlightError
 from pii_erasure.saga.graph import production_graph
 from pii_erasure.scheduler.base import WAKE_REASONS, UnknownWakeReasonError
 
 RESUME_SYSTEM_ID = "saga-resume"
+
+
+def _dimensions() -> Dimensions:
+    """Stage from the environment, plane fixed. No thread id: EMF bills one custom
+    metric per unique dimension combination, and a per-saga dimension would bill per
+    erasure request AND write a correlation key into a metrics surface."""
+    return Dimensions(stage=os.environ.get("PII_ERASURE_STAGE", "dev"), plane="resume")
+
 
 configure_logging()
 _log = get_logger(__name__)
@@ -88,12 +97,22 @@ def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         }
     if prior is not None:
         log.info("duplicate_wake")
+        # The delivery dedup firing is not an error — Scheduler is at-least-once by
+        # design. It is a metric because a RISE in it means the stale-wake filter above
+        # stopped catching redeliveries, and that is invariant 11 leaking (§10.1).
+        emit("scheduler.duplicate_wake", 1, _dimensions())
         return {"status": "duplicate_wake", "thread_id": thread_id, "wake_reason": wake_reason}
 
     try:
         result = graph.invoke(Command(resume=_resume_value(wake_reason)), config, durability="sync")
     except Exception:
         dedup.release(system_id=RESUME_SYSTEM_ID, key=key)
+        # Emitted before the re-raise, because the re-raise is what makes Lambda record a
+        # failure and this is the only place that knows a RESUME failed rather than a
+        # participant. That distinction is the whole point of the metric: a resume failure
+        # is an upgrade defect (ADR-016), and it is the shape a silently stranded erasure
+        # request takes on its way to a missed statutory deadline.
+        emit("checkpoint.resume_failure", 1, _dimensions(), wake_reason=wake_reason)
         raise
 
     paused = "__interrupt__" in result

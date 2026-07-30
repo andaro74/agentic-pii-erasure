@@ -61,6 +61,12 @@ class MetricSpec:
     #: emitted by application code and say why — see MECHANISM_NOTES.
     emitted_by_app: bool
     why: str
+    #: The module that calls `emit` for this metric, dotted and relative to
+    #: `pii_erasure` (or an `evals.` path). `None` means no call site yet, and a test
+    #: requires such a metric to appear in MECHANISM_NOTES or PENDING_EMITTERS — so
+    #: "documented, alarmed, and emitted by nobody" is a build failure rather than a
+    #: dashboard that reads healthy.
+    emitter: str | None = None
 
 
 #: Twelve rows, in §10.1's order. Kept as data so drift between the doc, the emitters and
@@ -73,6 +79,7 @@ METRICS: tuple[MetricSpec, ...] = (
         "Minimum",
         True,
         "Any value below 1.00 is P1 — the one metric a false negative hides behind",
+        "evals.run",
     ),
     MetricSpec(
         "deletion.residual_artifacts",
@@ -81,6 +88,7 @@ METRICS: tuple[MetricSpec, ...] = (
         "Sum",
         True,
         "Anything remaining after verify that no participant disclosed",
+        "saga.nodes.verify",
     ),
     MetricSpec(
         "resurrection.detected",
@@ -89,6 +97,7 @@ METRICS: tuple[MetricSpec, ...] = (
         "Sum",
         True,
         "A write path that bypasses the tombstone check — distinct from a deletion failure",
+        "saga.nodes.sweep",
     ),
     MetricSpec(
         "approval.time_to_decision",
@@ -105,6 +114,7 @@ METRICS: tuple[MetricSpec, ...] = (
         "Maximum",
         True,
         "A halted erasure needs a human; 24h of it is a missed deadline forming",
+        "saga.nodes.hard_delete",
     ),
     MetricSpec(
         "policy.deny",
@@ -113,6 +123,7 @@ METRICS: tuple[MetricSpec, ...] = (
         "Sum",
         True,
         "Not alarmed on absolute count — a spike means injection or misconfiguration",
+        "policy.engine",
     ),
     MetricSpec(
         "manifest.digest_mismatch",
@@ -121,6 +132,7 @@ METRICS: tuple[MetricSpec, ...] = (
         "Sum",
         True,
         "Any occurrence is a security event (§8.3), not a retry",
+        "saga.nodes.hard_delete",
     ),
     MetricSpec(
         "saga.duration",
@@ -137,6 +149,7 @@ METRICS: tuple[MetricSpec, ...] = (
         "Sum",
         True,
         "An upgrade defect, not a participant defect — ADR-016's stranded saga",
+        "scheduler.handler",
     ),
     MetricSpec(
         "scheduler.duplicate_wake",
@@ -145,6 +158,7 @@ METRICS: tuple[MetricSpec, ...] = (
         "Sum",
         True,
         "Resume idempotency leaking (invariant 11)",
+        "scheduler.handler",
     ),
     MetricSpec(
         "saga.executor_timeout",
@@ -165,6 +179,27 @@ METRICS: tuple[MetricSpec, ...] = (
 )
 
 BY_NAME: dict[str, MetricSpec] = {spec.name: spec for spec in METRICS}
+
+#: Metrics whose emitter is not written yet, and what is actually blocking each. Separate
+#: from MECHANISM_NOTES because these *can* be emitted by application code — they are
+#: waiting on a decision, not on a different mechanism. A test requires every unwired
+#: metric to appear in one dict or the other, so "documented, alarmed, emitted by nobody"
+#: cannot pass quietly.
+PENDING_EMITTERS: dict[str, str] = {
+    "approval.time_to_decision": (
+        "Needs the moment the request arrived, which saga state does not carry. It cannot "
+        "be a local in the approval node: `interrupt()` re-executes that node from the top "
+        "on resume, so `now()` there measures the resume, not the pause. Adding "
+        "`started_at` to SagaState changes the checkpointed shape, which is invariant 9's "
+        "territory and deserves its own commit and its own canary run rather than a "
+        "footnote in this one."
+    ),
+    "saga.duration": (
+        "The same missing `started_at`. Deliberately not approximated from the ledger's "
+        "first entry: the ledger is the audit record, and deriving an SLO metric from it "
+        "would make a monitoring change able to alter what an auditor reads."
+    ),
+}
 
 #: The two metrics application code cannot emit, and what must publish them instead.
 #: Written down because §10.1 tabulates all twelve as if they were alike, and building

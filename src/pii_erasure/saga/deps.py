@@ -20,6 +20,7 @@ import boto3
 from pii_erasure.approval.tokens import TokenMinter
 from pii_erasure.ledger.writer import LedgerWriter
 from pii_erasure.manifest import ManifestSigner
+from pii_erasure.observability.metrics import Dimensions
 from pii_erasure.saga.invoker import LambdaParticipantInvoker
 from pii_erasure.saga.planner import DiscoveryPlanner, planner_from_environment
 from pii_erasure.saga.tombstone import TombstoneRegistry
@@ -74,6 +75,10 @@ class SagaDeps:
     tokens: TokenMinter
     trusted_key_arns: frozenset[str] | None
     now: Callable[[], datetime]
+    #: The deployed stage, used as the metric dimension. Defaults so the hermetic tests
+    #: that construct SagaDeps directly need no change; `production_deps` reads the real
+    #: one from the environment.
+    stage: str = "test"
     approval_timeout_seconds: int = DEFAULT_APPROVAL_TIMEOUT_SECONDS
     #: (T+7 delay, T+30 delay) in seconds. Integration shortens these; the *sequence*
     #: is never shortened — both sweeps always run.
@@ -93,6 +98,15 @@ class SagaDeps:
     #: dataclass a model client could live in, which is invariant 2 expressed as
     #: a type rather than as a rule.
     planner: DiscoveryPlanner | None = None
+
+    def metric_dimensions(self, plane: str, system_id: str | None = None) -> Dimensions:
+        """Dimensions for `observability.metrics.emit`.
+
+        Here rather than in each node so every saga metric carries the same dimension set —
+        two nodes disagreeing about dimensions would silently create two metrics, and an
+        alarm would watch whichever one it was written against.
+        """
+        return Dimensions(stage=self.stage, plane=plane, system_id=system_id)
 
 
 def _utcnow() -> datetime:
@@ -118,6 +132,7 @@ def production_deps() -> SagaDeps:
         ),
         ledger=LedgerWriter(os.environ["LEDGER_TABLE"]),
         scheduler=_production_scheduler(stage),
+        stage=stage,
         tombstones=TombstoneRegistry(os.environ["TOMBSTONES_TABLE"]),
         dead_letters=SqsDeadLetters(os.environ["SAGA_DLQ_URL"]),
         planner=planner_from_environment(),

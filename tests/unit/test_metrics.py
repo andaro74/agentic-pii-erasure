@@ -157,3 +157,63 @@ def test_a_metric_document_survives_the_logging_scrubber_intact() -> None:
     scrubbed = scrub_mapping(document)
     assert scrubbed["_aws"] == document["_aws"]
     assert scrubbed["manifest.digest_mismatch"] == 1
+
+
+# ─── the registry must match the call sites ───────────────────────────────────────────
+
+
+def _module_source(dotted: str) -> str:
+    """`saga.nodes.verify` → the file, whether under `pii_erasure/` or the repo root."""
+    relative = Path(*dotted.split(".")).with_suffix(".py")
+    for base in (REPO / "src" / "pii_erasure", REPO):
+        candidate = base / relative
+        if candidate.is_file():
+            return candidate.read_text(encoding="utf-8")
+    raise AssertionError(f"{dotted} names no module — {relative} is not under src/ or the root")
+
+
+@pytest.mark.parametrize("spec", [s for s in m.METRICS if s.emitter], ids=lambda s: s.name)
+def test_a_named_emitter_really_emits_that_metric(spec: m.MetricSpec) -> None:
+    """The registry claims a module publishes this metric. Check the call is there.
+
+    Without this the registry is a wish: it would keep asserting agreement with
+    ARCHITECTURE §10.1 and with the alarms while nothing wrote a data point, and every
+    alarm would read as healthy for the most boring possible reason.
+    """
+    assert spec.emitter is not None  # narrowed for mypy; the parametrize filters these
+    source = _module_source(spec.emitter)
+    assert f'"{spec.name}"' in source, (
+        f"{spec.emitter} is recorded as the emitter of {spec.name} but never names it"
+    )
+    assert "emit(" in source, f"{spec.emitter} never calls emit()"
+
+
+def test_every_metric_is_either_emitted_noted_or_pending() -> None:
+    """No fourth state. A metric with no emitter, no mechanism note and no pending reason
+    is one somebody meant to wire and nothing will remind them about."""
+    for spec in m.METRICS:
+        if spec.emitter:
+            continue
+        explained = spec.name in m.MECHANISM_NOTES or spec.name in m.PENDING_EMITTERS
+        assert explained, (
+            f"{spec.name} has no emitter, and neither MECHANISM_NOTES (cannot be emitted "
+            f"by app code) nor PENDING_EMITTERS (not wired yet, and why) accounts for it"
+        )
+
+
+def test_the_two_dicts_do_not_overlap() -> None:
+    """ "Cannot be emitted by application code" and "not wired yet" are different claims.
+    A metric in both would let a permanent limitation masquerade as a to-do, or the
+    reverse — and the reverse is how a to-do stops being one."""
+    overlap = set(m.MECHANISM_NOTES) & set(m.PENDING_EMITTERS)
+    assert not overlap, f"{overlap} is described as both un-emittable and merely pending"
+
+
+def test_pending_metrics_are_marked_as_app_emittable() -> None:
+    """The distinction has to hold in the data too, not just in the prose: a pending
+    metric is one app code *will* emit, so `emitted_by_app` must already say so."""
+    for name in m.PENDING_EMITTERS:
+        assert m.BY_NAME[name].emitted_by_app, (
+            f"{name} is pending an emitter but marked as not app-emittable — one of the two "
+            f"is wrong"
+        )

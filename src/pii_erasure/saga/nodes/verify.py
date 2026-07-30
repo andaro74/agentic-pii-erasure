@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
+from pii_erasure.observability.metrics import emit
 from pii_erasure.saga.deps import SagaDeps
 from pii_erasure.saga.nodes._shared import manifest_from_state, verify_all_participants
 from pii_erasure.saga.state import STATUS_STUCK
@@ -25,6 +26,15 @@ def make_verify(deps: SagaDeps) -> Callable[[dict[str, Any]], dict[str, Any]]:
             # in its own receipt — a scoped legal hold, ADR-027 — is not read as a
             # failed erasure by the node that runs immediately after it.
             receipts_so_far=state.get("receipts"),
+        )
+
+        # Emitted on every pass, including the clean one: a counter that is only written
+        # when it is non-zero has no baseline, so "no data" and "nothing left behind" look
+        # identical on a dashboard and the alarm cannot distinguish them.
+        emit(
+            "deletion.residual_artifacts",
+            sum(int(item["remainingCount"]) for item in unexpected),
+            deps.metric_dimensions("saga"),
         )
 
         if unexpected:
