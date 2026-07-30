@@ -2,7 +2,9 @@
 
 > ## ⚠️ Read this before you deploy
 >
-> **This stack costs real money — but nothing in it bills continuously for existing rather than for working.** Every component is per-request, per-GB, or per-session-second. An idle dev stack costs cents per month, and Bedrock tokens are the largest line item on an active one.
+> **This stack costs real money — but almost nothing in it bills continuously for existing rather than for working.** Every component is per-request, per-GB, or per-session-second, with **one exception, stated rather than glossed: a single Secrets Manager secret at $0.40/month.** The RDS Data API authenticates with a secret ARN, and the Data API is what keeps every Lambda out of a VPC — so the floor is forced by the choice that removes a much larger one. An idle dev stack costs cents per month, and Bedrock tokens are the largest line item on an active one.
+>
+> That claim is now checked rather than asserted: `tests/unit/test_cost_floors.py` reads the synthesised templates and fails on any floor-bearing resource type without an ADR behind it — including services this repo has never used, because the point is the *next* one somebody adds ([V13-4](../docs/VALIDATION.md)).
 >
 > That is a deliberate constraint, and it cost one participant its original service: `vector-index` was Amazon OpenSearch Serverless, whose OCU floor is charged for as long as the collection exists and which used to dominate this bill by an order of magnitude over everything else combined. It is now **S3 Vectors**, priced on stored bytes and requests with no provisioned capacity. **The swap was made purely on cost** — [ADR-021](../docs/adr/ADR-021-s3-vectors-for-cost.md).
 >

@@ -957,7 +957,9 @@ What remains hermetic: unit tests, the policy engine, canonicalisation, reducers
 
 ### 14.2 Cost, stated plainly
 
-**Nothing in this architecture bills continuously for existing rather than for working.** Every component is per-request, per-GB, or per-session-second, and an idle stack costs cents per month.
+**Almost nothing in this architecture bills continuously for existing rather than for working.** Every component is per-request, per-GB, or per-session-second, and an idle stack costs cents per month.
+
+**The one exception, named because a constraint with an unrecorded exception is not a constraint:** a single Secrets Manager secret, **$0.40/month**, created for the Aurora credentials. It is forced rather than chosen — the RDS Data API authenticates with a secret ARN, and the Data API is exactly what lets every Lambda stay out of a VPC ([ADR-023](adr/ADR-023-aurora-needs-a-vpc.md)). Trading it for credentials in an environment variable would swap $0.40/month for a secret in plaintext in a template. It went unrecorded until M10 made the rule mechanical, and `tests/unit/test_cost_floors.py` now fails the build on any floor-bearing resource without an ADR behind it — including the twenty-odd services this repo has never used, because the value of that list is the service someone adds next ([VALIDATION.md](VALIDATION.md) V13-4).
 
 That is a deliberate property, not a happy accident, and it cost the derived-index participant its original service. `vector-index` was Amazon OpenSearch Serverless, whose OCU floor is charged for as long as the collection exists; it is now **S3 Vectors**, priced on stored bytes and requests with no provisioned capacity ([ADR-021](adr/ADR-021-s3-vectors-for-cost.md)). Before the swap, that one participant dominated the bill by an order of magnitude over everything else combined — Bedrock included.
 
