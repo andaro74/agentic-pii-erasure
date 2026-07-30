@@ -231,6 +231,33 @@ An idle stack now costs cents rather than hundreds of dollars a month. That matt
 4. Add seed data in `seeds/` and let the generator emit ground truth for it.
 5. `make check` then `make conformance` must pass. That is the entire registration process.
 
+## How this was built
+
+**This is a human–AI collaboration, and the split of work is worth stating plainly.**
+
+[**andaro74**](https://github.com/andaro74) brought the business case and the architecture:
+what problem was worth solving, how the system should be structured, which trade-offs were
+acceptable, and where the hard constraints sat. The design is the human's.
+
+**Claude Opus 5** and **Claude Fable 5**, working in [Claude Code](https://claude.com/claude-code),
+produced the execution plan and the code against that design — the milestone sequence in
+[`docs/ROADMAP.md`](docs/ROADMAP.md), the implementation behind each milestone's gates, the
+tests that hold them, and the ADRs recording what was decided and why.
+
+**The collaboration is auditable, which is the part that matters for a repo making this
+claim.** It is not asserted here and left at that:
+
+- [`docs/adr/`](docs/adr/) holds every architectural decision, including the three that
+  changed on the record — framework (009 → 011 → 013), durability (003 → 014 → 016),
+  participants (012 → 017). Superseded ADRs are kept deliberately rather than tidied away.
+- [`docs/VALIDATION.md`](docs/VALIDATION.md) logs every control that turned out not to
+  work — the test that could not fail, the gate that could not gate, the alarm that could
+  not fire — with how it was found and what now backs it. A good number of those were
+  defects in Claude's own work, found by later passes and recorded rather than quietly
+  fixed. That log is the honest measure of "built to best practices", and it is more
+  useful than the claim.
+- The git history carries the whole build, milestone by milestone.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
