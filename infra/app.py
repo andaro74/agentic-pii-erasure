@@ -16,6 +16,7 @@ from aws_cdk import App
 from stacks.api import ApiStack
 from stacks.foundation import FoundationStack
 from stacks.gateway import GatewayStack
+from stacks.observability import ObservabilityStack
 from stacks.participants import ParticipantsStack
 from stacks.runtime import RuntimeStack
 from stacks.saga import SagaStack
@@ -94,6 +95,16 @@ saga = SagaStack(
     # this Runtime and receives a manifest. Passed as an exact ARN rather than a
     # pattern, which is why the runtime stack is constructed first.
     discovery_runtime_arn=runtime.runtime.attr_agent_runtime_arn,
+)
+
+# Alarms and the dashboard (M10). Takes the stage and nothing else: it alarms on metrics
+# by name in a namespace, and importing the log group by name rather than by reference is
+# deliberate — Lambda creates that group itself, and a second declaration of it fails the
+# deploy after the change set is accepted.
+ObservabilityStack(
+    app,
+    f"asdp-{stage}-observability",
+    stage=stage,
 )
 
 # The operator front door (M8). It receives the executor function and nothing else —

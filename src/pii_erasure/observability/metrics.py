@@ -45,6 +45,12 @@ Unit = Literal["Count", "Seconds", "Milliseconds", "Percent", "None"]
 #: sense for the metric's type (a p90 of a counter, say).
 Statistic = Literal["Sum", "Average", "Maximum", "Minimum", "p90", "p99"]
 
+#: Which side of the threshold is the bad side. Part of what §10.1's "Alarm" column
+#: means, so it lives with the threshold rather than in the stack: `discovery.recall`
+#: is the one metric where LOW is the failure, and an alarm built with the operator
+#: reversed would be permanently green on the only number ADR-008 calls P1.
+AlarmWhen = Literal["above", "below"]
+
 
 @dataclass(frozen=True)
 class MetricSpec:
@@ -67,6 +73,7 @@ class MetricSpec:
     #: "documented, alarmed, and emitted by nobody" is a build failure rather than a
     #: dashboard that reads healthy.
     emitter: str | None = None
+    alarm_when: AlarmWhen = "above"
 
 
 #: Twelve rows, in §10.1's order. Kept as data so drift between the doc, the emitters and
@@ -80,6 +87,7 @@ METRICS: tuple[MetricSpec, ...] = (
         True,
         "Any value below 1.00 is P1 — the one metric a false negative hides behind",
         "evals.run",
+        "below",
     ),
     MetricSpec(
         "deletion.residual_artifacts",
