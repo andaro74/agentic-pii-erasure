@@ -1,3 +1,5 @@
+![Agentic PII Erasure — GDPR Art. 17, the right to erasure. Automated, auditable deletion of a data subject across eight AWS systems. The erasure pipeline: 1 discover, where the agent reads and then proposes a manifest; 2 soft delete, reversible — disable, tombstone; a human approval gate; 3 hard delete, forward only — purge, crypto-shred. The agent proposes. The saga disposes. Built with Claude Code, LangChain and LangGraph on Amazon Bedrock AgentCore, MCP, Cedar and DynamoDB.](docs/agentic-pii-erasure-github-social-preview.png)
+
 # Agentic PII Erasure
 
 **Automated, auditable, multi-system deletion of a data subject — where the agent never deletes anything.**
