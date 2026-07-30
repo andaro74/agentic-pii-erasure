@@ -156,10 +156,24 @@ class ObservabilityStack(Stack):
             metric_namespace=NAMESPACE,
             metric_name="saga.executor_timeout",
             metric_value="1",
-            # Zero for non-matching events, so the metric has a baseline and the alarm can
-            # distinguish "no timeouts" from "no data" — the same reason the saga emits a
-            # zero on its clean paths.
-            default_value=0,
+            # NO `default_value`, and the omission is forced rather than chosen. AWS:
+            # "If you assign dimensions to a metric created by a metric filter, you can't
+            # assign a default value for that metric." Setting both is rejected at deploy
+            # time with a 400 — which is where this was found (V13-11), because `cdk synth`
+            # validates template shape and never the service's own rules.
+            #
+            # Of the two, `dimensions` is the one that has to stay. The alarm is built with
+            # `dimensions_map={stage, plane}` like every other alarm here, and a dimension
+            # set is part of a metric's identity: publish this metric bare and the alarm
+            # watches a combination nothing writes, sits at NOT_BREACHING, and renders
+            # green forever. That is V13-8, re-entered through a service constraint.
+            # `stage` also keeps a dev timeout off the prod alarm — the filters are
+            # per-log-group, but the metric they publish into is account-wide.
+            #
+            # What the zero baseline actually bought is smaller than it looks: the alarm
+            # already treats missing data as NOT_BREACHING, and at Sum over two datapoints
+            # a lone timeout does not fire with or without it. The dashboard shows gaps
+            # between events instead of a flat zero line. That is the whole cost.
             dimensions={"stage": self.stage, "plane": "saga"},
         )
 

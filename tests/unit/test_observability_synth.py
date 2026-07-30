@@ -225,11 +225,49 @@ def test_the_executor_timeout_metric_is_extracted_from_logs(template: Any) -> No
     transformation = body["Properties"]["MetricTransformations"][0]
     assert transformation["MetricName"] == "saga.executor_timeout"
     assert transformation["MetricNamespace"] == NAMESPACE
-    assert transformation["DefaultValue"] == 0, (
-        "without a default the metric has no baseline, and the alarm cannot tell "
-        "'no timeouts' from 'no data'"
-    )
     assert "Task timed out" in body["Properties"]["FilterPattern"]
+
+    # The filter must publish the SAME dimension set the alarm watches, for the reason
+    # V13-8 established: a dimension set is part of a metric's identity, and this is the
+    # one §10.1 metric whose publisher is the stack rather than application code — so
+    # nothing in `metrics.py` constrains it and it has to be checked here.
+    published = {pair["Key"]: pair["Value"] for pair in transformation["Dimensions"]}
+    assert published == {"stage": STAGE, "plane": "saga"}
+
+    # And the pair AWS refuses, asserted here too rather than only in the sweep below —
+    # this is the filter that actually failed a deploy.
+    assert "DefaultValue" not in transformation
+
+
+def test_no_metric_filter_sets_both_dimensions_and_a_default_value() -> None:
+    """AWS rejects the combination at deploy time; `cdk synth` never sees it (V13-11).
+
+    *"If you assign dimensions to a metric created by a metric filter, you can't assign a
+    default value for that metric."* CloudFormation returns a 400 — after the change set
+    is accepted, which is the expensive place to learn it, and it took a real
+    `make deploy-dev` to find. This is the repo's standing rule about fakes applied to the
+    hermetic gate itself: when the service refuses something the gate accepted, teach the
+    gate that one rule.
+
+    Scans every synthesised template, not just this stack's, so the next metric filter
+    added anywhere is covered on creation rather than on the deploy that fails.
+    """
+    from tests.unit.synthesised import templates
+
+    offenders = [
+        f"{name}:{logical}"
+        for name, body in templates().items()
+        for logical, resource in body.get("Resources", {}).items()
+        if resource.get("Type") == "AWS::Logs::MetricFilter"
+        for transformation in resource["Properties"]["MetricTransformations"]
+        if transformation.get("Dimensions") and "DefaultValue" in transformation
+    ]
+    assert not offenders, (
+        f"{offenders} set both Dimensions and DefaultValue on a metric transformation. "
+        f"CloudWatch Logs rejects that pair with a 400 at deploy time. Keep the "
+        f"dimensions — an alarm watching a dimension set nobody publishes can never fire "
+        f"(V13-8) — and drop the default value."
+    )
 
 
 def test_the_stack_declares_no_log_group(template: Any) -> None:
