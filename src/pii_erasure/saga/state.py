@@ -107,6 +107,21 @@ class SagaState(TypedDict, total=False):
     subject_ref: Annotated[str, set_once]  # pseudonymous handle — never raw PII
     request_id: Annotated[str, set_once]
     tenant_id: Annotated[str, set_once]
+    #: When intake accepted the request, ISO-8601 UTC. The anchor for both duration
+    #: metrics in §10.1, and the only field here that exists for observability rather
+    #: than for control flow — no edge reads it.
+    #:
+    #: It cannot be a local in the node that needs it: `interrupt()` re-executes its
+    #: node from the top on resume, so a `now()` taken inside `approval_gate` measures
+    #: the resume rather than the pause. So it is written once, early, and carried.
+    #:
+    #: Adding a key to the CHECKPOINTED shape is invariant 9's neighbourhood. This one
+    #: is additive and optional: a checkpoint written before the field existed
+    #: deserializes unchanged and simply lacks it, and every reader treats absence as
+    #: "no data point" rather than as a duration of zero. Nothing here reaches the
+    #: manifest, so canonicalisation and every existing digest are untouched
+    #: (invariant 4).
+    started_at: Annotated[str | None, set_once]
 
     # ── the plan (write-once; invariant 3) ───────────────────────────────────
     #: The manifest handed in at start — M5's hand-written fixture (ADR-001: the saga

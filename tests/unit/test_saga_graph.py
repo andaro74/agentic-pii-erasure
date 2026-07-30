@@ -39,14 +39,18 @@ from pii_erasure.manifest.signing import SigningError
 from pii_erasure.saga.deps import SagaDeps
 from pii_erasure.saga.graph import build_graph
 from pii_erasure.saga.invoker import ParticipantCallError
+from pii_erasure.saga.nodes._shared import elapsed_seconds, iso, parse_iso
 from pii_erasure.saga.nodes.hard_delete import make_hard_delete
+from pii_erasure.saga.nodes.intake import make_intake
 from pii_erasure.saga.nodes.sweep import STATUS_RESURRECTION
+from pii_erasure.saga.nodes.verify import make_verify
 from pii_erasure.saga.state import (
     STATUS_ABORTED,
     STATUS_ALREADY_TOMBSTONED,
     STATUS_BLOCKED,
     STATUS_COMPENSATED,
     STATUS_COMPLETED,
+    set_once,
 )
 from tests.conftest import build_fixture_manifest
 
@@ -202,6 +206,11 @@ class FakeTokens:
 
 class Rig:
     def __init__(self, *, grace_override: int | None = None) -> None:
+        #: Advanceable, because the duration metrics measure wall-clock time across a
+        #: pause: `rig.clock = _NOW + timedelta(days=6)` before resuming is what a real
+        #: six-day approval looks like from the node's side. Every existing test leaves
+        #: it alone and so still sees a frozen clock.
+        self.clock = _NOW
         self.participants = FakeParticipants()
         self.ledger = FakeLedger()
         self.scheduler = FakeScheduler()
@@ -216,7 +225,7 @@ class Rig:
             signer=FakeSigner(),  # type: ignore[arg-type]
             tokens=FakeTokens(),  # type: ignore[arg-type]
             trusted_key_arns=None,
-            now=lambda: _NOW,
+            now=lambda: self.clock,
             approval_timeout_seconds=3600,
             sweep_delays_seconds=(60, 120),
             grace_seconds_override=grace_override,
@@ -800,3 +809,167 @@ def test_no_data_is_distinct_from_completed() -> None:
     from pii_erasure.saga.state import STATUS_COMPLETED, STATUS_NO_DATA
 
     assert STATUS_NO_DATA != STATUS_COMPLETED
+
+
+# ─── the two duration metrics, and the clock they measure ─────────────────────────────
+
+
+@pytest.fixture
+def metrics(monkeypatch: pytest.MonkeyPatch) -> dict[str, list[float]]:
+    """Every metric the executor nodes publish, captured with its VALUE.
+
+    Patched at the two seams the nodes emit through rather than read out of captured log
+    lines, because the value is the entire risk in this pair: a duration of zero is
+    indistinguishable from a decision taken instantly, and it is the number an alarm
+    threshold is compared against.
+    """
+    recorded: dict[str, list[float]] = {}
+
+    def record(name: str, value: float, dimensions: Any, **context: Any) -> None:
+        recorded.setdefault(name, []).append(value)
+
+    monkeypatch.setattr("pii_erasure.saga.nodes._shared.emit", record)
+    monkeypatch.setattr("pii_erasure.saga.nodes.verify.emit", record)
+    return recorded
+
+
+def test_the_approval_gate_measures_the_pause_and_not_the_resume(
+    metrics: dict[str, list[float]],
+) -> None:
+    """Six days pass between the interrupt and the decision; the metric must say six days.
+
+    This is why `started_at` is in the checkpointed state at all. `interrupt()`
+    re-executes its node from the top on resume, so anything the approval gate learns
+    from a local `now()` describes the moment the approver answered — the metric would
+    read as a few milliseconds no matter how long the human took, which is the shape of
+    an SLO that can never be breached.
+    """
+    rig = Rig()
+    paused = rig.start()
+    assert paused["__interrupt__"][0].value["gate"] == "approval"
+
+    rig.clock = _NOW + timedelta(days=6)
+    rig.approve(paused)
+
+    assert metrics["approval.time_to_decision"] == [6 * 86400]
+
+
+def test_a_denial_is_also_a_decision_and_is_measured(metrics: dict[str, list[float]]) -> None:
+    """§10.1 asks for time to *decision*. Emitting only on approval would make the
+    histogram a histogram of approvals, and the approval-timeout path — which is where a
+    27-day silence actually shows up — would be the one case never measured."""
+    rig = Rig()
+    rig.start()
+    rig.clock = _NOW + timedelta(days=14)
+    result = rig.resume({"decision": "deny", "approver": "unit-approver"})
+
+    assert result["status"] == STATUS_COMPENSATED
+    assert metrics["approval.time_to_decision"] == [14 * 86400]
+
+
+def test_an_invalid_resume_is_not_a_decision_and_is_not_measured(
+    metrics: dict[str, list[float]],
+) -> None:
+    """A resume carrying the wrong digest is a TOCTOU signal, not an answer. Counting it
+    would put a data point on the histogram for a decision nobody made."""
+    rig = Rig()
+    rig.start()
+    rig.clock = _NOW + timedelta(days=3)
+    rig.resume({"decision": "approve", "digest": _ZERO, "approver": "attacker"})
+
+    assert "approval.time_to_decision" not in metrics
+
+
+def test_saga_duration_stops_at_verification_not_at_the_graphs_end(
+    metrics: dict[str, list[float]],
+) -> None:
+    """The measurement point is the whole design decision, so it gets a test.
+
+    `sweep` is where `status` becomes `completed`, and it gets there after the T+30
+    re-verification. A duration measured at END would therefore be a month longer than
+    the answer took on every healthy saga, and any deadline-shaped threshold would fire
+    on all of them. Ten days here, forty by the time the graph ends: the metric must say
+    ten.
+    """
+    rig = Rig()
+    paused = rig.start()
+    rig.clock = _NOW + timedelta(days=10)
+    result = rig.approve(paused)  # grace 0 → runs phase 3 and verify in this invocation
+    assert result["__interrupt__"][0].value["gate"] == "sweep"
+
+    rig.clock = _NOW + timedelta(days=17)
+    rig.resume({"wake_reason": "sweep_t7"})
+    rig.clock = _NOW + timedelta(days=40)
+    final = rig.resume({"wake_reason": "sweep_t30"})
+
+    assert final["status"] == STATUS_COMPLETED
+    assert metrics["saga.duration"] == [10 * 86400]
+
+
+def test_a_saga_that_predates_started_at_publishes_no_duration(
+    metrics: dict[str, list[float]],
+) -> None:
+    """The compatibility path, at a real call site.
+
+    A saga paused at the approval gate right now was checkpointed before `started_at`
+    existed. On resume its state simply lacks the field, and the honest reading is *no
+    data point* — never zero, which would report an erasure that took no time at all and
+    would drag a p99 down with it. The node's other metric still lands, which is what
+    separates "skipped the duration" from "the node fell over".
+    """
+    rig = Rig()
+    manifest = build_fixture_manifest(saga_id="saga_pre_change", subject_ref="sub_pre_change")
+    verify = make_verify(rig.deps)
+
+    result = verify({"manifest": manifest.model_dump(mode="json", by_alias=True)})
+
+    assert result == {"receipts": result["receipts"]}  # clean verify, nothing else changed
+    assert metrics["deletion.residual_artifacts"] == [0]
+    assert "saga.duration" not in metrics
+
+
+def test_intake_re_executing_reuses_the_start_moment_it_already_recorded() -> None:
+    """`started_at` is `set_once`, and a second write with a *different* value raises.
+
+    Every other write-once field replays identically because it is derived from a
+    manifest or a participant. This one is derived from the clock, which a re-executed
+    node cannot reproduce — so intake reads before it writes. Without that, a Lambda
+    retry would fail the saga inside the reducer.
+    """
+    rig = Rig()
+    intake = make_intake(rig.deps)
+    start = {
+        "saga_id": "saga_retry",
+        "subject_ref": "sub_retry",
+        "request_id": "dsr_retry",
+        "tenant_id": "meridian",
+    }
+
+    first = intake(start)
+    rig.clock = _NOW + timedelta(days=1)
+    second = intake({**start, **first})
+
+    assert first["started_at"] == second["started_at"] == _TS
+    assert set_once(first["started_at"], second["started_at"]) == _TS
+
+
+def test_elapsed_is_absent_rather_than_zero_and_never_negative() -> None:
+    """Two ways the helper could lie, both pinned.
+
+    Absence must not become zero (see the compatibility test above), and clock skew
+    between two Lambda invocations must not become a negative duration — CloudWatch
+    cannot hold one, and it would silently poison the statistic for the window.
+    """
+    assert elapsed_seconds({}, _NOW) is None
+    assert elapsed_seconds({"started_at": None}, _NOW) is None
+    assert elapsed_seconds({"started_at": _TS}, _NOW + timedelta(hours=2)) == 7200
+    assert elapsed_seconds({"started_at": _TS}, _NOW - timedelta(seconds=5)) == 0.0
+
+
+def test_the_start_moment_round_trips_through_its_own_serialisation() -> None:
+    """`iso` writes a trailing `Z`; `fromisoformat` only accepts one from 3.11, and
+    `requires-python` is 3.10. A parser that agreed with itself but not with the writer
+    would raise inside a node."""
+    assert parse_iso(iso(_NOW)) == _NOW
+    # An offset-less value is read as UTC — the platform writes nothing else.
+    assert parse_iso("2026-07-26T12:00:00") == _NOW

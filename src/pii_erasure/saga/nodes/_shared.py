@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from collections.abc import Mapping
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
 from pii_erasure.contract import VerifyRequest, VerifyResponse
 from pii_erasure.contract.registry import get as registry_get
 from pii_erasure.manifest import Manifest
+from pii_erasure.observability.metrics import emit
 
 if TYPE_CHECKING:
     from pii_erasure.saga.deps import SagaDeps
@@ -38,6 +40,50 @@ def receipt_key(verb: str, system_id: str) -> str:
 
 def iso(moment: datetime) -> str:
     return moment.isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def parse_iso(text: str) -> datetime:
+    """The inverse of `iso`, on 3.10.
+
+    `datetime.fromisoformat` only accepts a trailing ``Z`` from 3.11, and
+    `requires-python` here is 3.10 — so the offset is normalised rather than assumed to
+    parse. A value carrying no offset at all is read as UTC: this platform writes
+    nothing else, and there is no second plausible reading of a saga timestamp.
+    """
+    normalised = f"{text[:-1]}+00:00" if text.endswith("Z") else text
+    moment = datetime.fromisoformat(normalised)
+    return moment if moment.tzinfo is not None else moment.replace(tzinfo=timezone.utc)
+
+
+def elapsed_seconds(state: Mapping[str, Any], now: datetime) -> float | None:
+    """Seconds since intake accepted this request, or `None` if that is unknown.
+
+    `None` is returned for a checkpoint written before `started_at` existed. Clock skew
+    between the intake invocation and this one is clamped to zero — sub-second skew
+    genuinely is "instant", and a negative duration is not a number CloudWatch can hold.
+    """
+    raw = state.get("started_at")
+    if not raw:
+        return None
+    return max(0.0, (now - parse_iso(str(raw))).total_seconds())
+
+
+def emit_elapsed(deps: SagaDeps, state: Mapping[str, Any], metric: str) -> float | None:
+    """Publish `metric` as seconds since intake — or publish **nothing** if unknown.
+
+    The guard lives here rather than at each call site so there is exactly one place for
+    it to be right, and no second duration metric can be added without it.
+
+    Skipping the data point is the deliberate half, and it is not the same as emitting
+    zero. A zero on a duration reads as *answered instantly*: it would pull a p99
+    downwards, so a fleet of sagas that started before this field existed could hold
+    `approval.time_to_decision` below its alarm threshold while the thing the alarm
+    watches for was happening. Absent has to look absent.
+    """
+    seconds = elapsed_seconds(state, deps.now())
+    if seconds is not None:
+        emit(metric, seconds, deps.metric_dimensions("saga"))
+    return seconds
 
 
 def disclosed_residuals(receipts: Any, system_id: str) -> dict[str, int]:

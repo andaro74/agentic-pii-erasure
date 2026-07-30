@@ -62,16 +62,15 @@ NOT_ALARMED: dict[str, str] = {
         "on normal operation or be set so high it never fires. Dashboarded so a human can "
         "see the shape; anomaly detection is the right control and is not free."
     ),
-    "approval.time_to_decision": (
-        "No emitter yet — see PENDING_EMITTERS in observability/metrics.py. Alarming on it "
-        "now would create exactly the INSUFFICIENT_DATA alarm this stack refuses to build."
-    ),
     "saga.duration": (
-        "No emitter yet, for the same missing `started_at` as approval.time_to_decision. "
-        "Deliberately not derived from the ledger's first entry either: the ledger is the "
-        "audit record, and letting a monitoring change alter what an auditor reads is a "
-        "worse defect than a missing alarm. Blocked on a checkpointed-state change, which "
-        "is invariant 9's territory."
+        "Emitted since `started_at` landed in SagaState — but with NO threshold, so no "
+        "alarm. §10.1 asks for `> statutory deadline minus 7d` (23 days), and the default "
+        "grace window is 30 (saga/nodes/plan.py), so a perfectly healthy saga reaches T+0 "
+        "verification after the one-month deadline and would breach that threshold every "
+        "single time. An always-red alarm is muted in week one, and a muted alarm is a "
+        "missing alarm with extra steps. This is ARCHITECTURE §16 Q4 — the grace-window / "
+        "statutory-deadline conflict — and the metric now measures it rather than "
+        "restating it: dashboarded, so the number is visible while the question is open."
     ),
     "dek_registry.read": (
         "Requires CloudTrail DATA events on the DEK registry table: a read by a "

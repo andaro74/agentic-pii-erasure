@@ -110,10 +110,17 @@ METRICS: tuple[MetricSpec, ...] = (
     MetricSpec(
         "approval.time_to_decision",
         "Seconds",
+        # 20 days, and the approval timeout is 14 (`saga/deps.py`) — so under working
+        # conditions this alarm is unreachable, because silence becomes a DENY decision
+        # six days before the threshold. That is deliberate rather than dead: the only way
+        # past 20 days is a timeout wake that never fired, which is precisely the failure
+        # a saga cannot report about itself. Unlike `saga.duration` below, the healthy case
+        # sits well *under* the threshold, so the alarm is quiet rather than always-red.
         20 * 86400,
         "p99",
         True,
         "p90 SLO is 5 days; alarm at p99 > 20d, before the statutory deadline",
+        "saga.nodes.approval_gate",
     ),
     MetricSpec(
         "phase3.stuck_participants",
@@ -145,10 +152,18 @@ METRICS: tuple[MetricSpec, ...] = (
     MetricSpec(
         "saga.duration",
         "Seconds",
-        23 * 86400,
+        # §10.1 specifies `> statutory deadline minus 7d` — 23 days. Deliberately NOT set:
+        # the default grace window is 30 days (`saga/nodes/plan.py`), so a healthy saga
+        # reaches T+0 verification *after* the one-month deadline and every single one of
+        # them would breach a 23-day threshold. That is ARCHITECTURE §16 Q4 — the
+        # grace-window/deadline conflict — showing up as a number instead of a caveat.
+        # Setting the threshold anyway would produce an always-red alarm, which gets
+        # muted in week one and is then indistinguishable from no alarm at all.
+        None,
         "Maximum",
         True,
-        "GDPR allows one month; alarm 7 days before, never at, the deadline",
+        "Intake to T+0 verification. Measures §16 Q4's conflict; unalarmed until it is answered",
+        "saga.nodes.verify",
     ),
     MetricSpec(
         "checkpoint.resume_failure",
@@ -193,21 +208,13 @@ BY_NAME: dict[str, MetricSpec] = {spec.name: spec for spec in METRICS}
 #: waiting on a decision, not on a different mechanism. A test requires every unwired
 #: metric to appear in one dict or the other, so "documented, alarmed, emitted by nobody"
 #: cannot pass quietly.
-PENDING_EMITTERS: dict[str, str] = {
-    "approval.time_to_decision": (
-        "Needs the moment the request arrived, which saga state does not carry. It cannot "
-        "be a local in the approval node: `interrupt()` re-executes that node from the top "
-        "on resume, so `now()` there measures the resume, not the pause. Adding "
-        "`started_at` to SagaState changes the checkpointed shape, which is invariant 9's "
-        "territory and deserves its own commit and its own canary run rather than a "
-        "footnote in this one."
-    ),
-    "saga.duration": (
-        "The same missing `started_at`. Deliberately not approximated from the ledger's "
-        "first entry: the ledger is the audit record, and deriving an SLO metric from it "
-        "would make a monitoring change able to alter what an auditor reads."
-    ),
-}
+#:
+#: **Currently empty, and that is the point** rather than a sign the dict is dead. Both
+#: entries it held
+#: — the two duration metrics — were waiting on `started_at` in `SagaState`, which now
+#: exists; the mechanism stays so the *next* metric added without an emitter fails the
+#: build instead of joining the dashboard as a permanent "no data" tile.
+PENDING_EMITTERS: dict[str, str] = {}
 
 #: The two metrics application code cannot emit, and what must publish them instead.
 #: Written down because §10.1 tabulates all twelve as if they were alike, and building

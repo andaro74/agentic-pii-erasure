@@ -815,13 +815,17 @@ Single trace fabric, joined on `sagaId`, spanning reasoning and execution. **Age
 | `phase3.stuck_participants` | Gauge | 0 | > 0 for 24h |
 | `policy.deny` | Counter | — | Spike = injection or misconfig |
 | `manifest.digest_mismatch` | Counter | 0 | Any occurrence is a security event |
-| `saga.duration` | Histogram | — | > statutory deadline − 7d |
+| `saga.duration` | Histogram | — | ~~> statutory deadline − 7d~~ **no alarm — see below** |
 | `checkpoint.resume_failure` | Counter | 0 | **Any occurrence — an upgrade defect, not a participant defect** |
 | `scheduler.duplicate_wake` | Counter | 0 | > 0 means resume idempotency is leaking |
 | `saga.executor_timeout` | Counter | 0 | > 0 means a phase exceeded the Lambda ceiling (§3.2) |
 | `dek_registry.read` (non-participant principal) | Counter | 0 | Any occurrence is a security event |
 
 The `saga.duration` alarm matters commercially: GDPR requires response within one month, extensible to three. Alarm *before* the deadline, not at it.
+
+**And that alarm is not built, because building it would have made it useless.** `saga.duration` is measured from intake to the **T+0 verification** — the moment the subject's request is actually answered — and not at the graph's END, which arrives after the T+30 re-verification sweep and is therefore a month past the answer on every healthy saga. But the default grace window is *itself* 30 days (§16 Q4), so even measured at T+0 a completely healthy saga finishes **after** the one-month deadline, and a 23-day threshold would fire on all of them. An always-red alarm gets muted in week one, and a muted alarm is a missing alarm with extra steps. So the metric is emitted and dashboarded with **no threshold**: §16 Q4's grace-window/deadline conflict is now a number an operator can watch rather than a caveat in prose, and the alarm becomes possible the moment that question is answered. Recorded in `NOT_ALARMED` in `infra/stacks/observability.py`, which a test requires to account for every unalarmed metric.
+
+The pair of duration metrics is also why `started_at` is in the **checkpointed** saga state rather than a local in the node that needs it: `interrupt()` re-executes its node from the top on resume, so a `now()` taken inside the approval gate measures the moment the approver answered, not how long they took.
 
 ---
 
@@ -920,13 +924,15 @@ Chaos scenarios worth building explicitly, because each one exercises a distinct
 | Digest mismatch | 3 | Cedar deny | Halt, security incident | ✅ |
 | **Checkpoint fails to deserialize after upgrade** | any | Resume error | Roll back the pinned versions; drain before retry | ✅ |
 | Scheduler fires twice | 2–3 | Duplicate wake | Idempotent resume handler absorbs it | ✅ |
-| Scheduler never fires | Gate/Grace | Saga silent past SLA | `saga.duration` alarm; manual resume via CLI | ✅ |
+| Scheduler never fires | Gate/Grace | **`make threads` — an operator read, not an alarm** (see below) | Manual resume via CLI | ✅ |
 | **Saga phase exceeds the 15-minute Lambda ceiling** | 2–3 | `saga.executor_timeout` | Re-invoke from checkpoint; the completed super-steps are durable | ✅ |
 | **AgentCore Runtime session hits the 8-hour cap** | 1 | Session terminated | Discovery is read-only and restartable; re-invoke | ✅ |
 | **DEK registry restored from a backup** | Post | Security alarm on registry read | Incident: previously-shredded subjects are readable again | ❌ |
 | **Vector key derivation changes, orphaning embeddings** | 3 | `verify` finds vectors the delete pass missed | Re-derive under the old scheme and re-run; S3 Vectors has no delete-by-query fallback | ❌ |
 
 Note the sharp line at the phase boundary. Everything above it is recoverable; nothing below it is. That line is the architecture.
+
+**One row in that table used to name a detection that cannot happen**, and it is worth leaving the correction visible. "Scheduler never fires" was detected by "`saga.duration` alarm" — but every metric this platform publishes is emitted *by a saga node*, and a saga whose timer never fires runs no node. There is no data point, so there is no alarm, and the row described an intention rather than a mechanism (V13-5, the same defect class as V13-4). Detecting a genuinely silent saga needs something *outside* the saga — a scheduled scan of the checkpointer for non-terminal threads older than their gate allows. That is a component nobody has built, so the honest entry is the one that exists: `make threads` reads every thread from the checkpointer and shows what each is waiting for, and an operator runs it. Automating it is a real gap, named here rather than papered over with an alarm that would sit green forever.
 
 ---
 
@@ -1028,7 +1034,7 @@ infra/stacks/  policies/cedar/  evals/  tests/{unit,conformance,integration}  do
 1. **Identity resolution is out of scope but not optional.** Matching a DSR to a subject across systems with no shared key is its own project. What is the assumed input — a Cognito `sub`? Where does fuzzy matching live?
 2. **Crypto-shred legal position.** Needs a recorded, jurisdiction-specific determination before the article asserts anything (§4.2).
 3. **Multi-tenant blast radius.** Should the velocity ceiling be per-tenant, global, or both?
-4. **Grace window vs. statutory deadline.** A 30-day grace window inside a one-month GDPR deadline leaves no margin. Reconcile: shorter grace, or start the clock at soft delete?
+4. **Grace window vs. statutory deadline.** A 30-day grace window inside a one-month GDPR deadline leaves no margin. Reconcile: shorter grace, or start the clock at soft delete? **Still open — but no longer only prose.** Wiring `saga.duration` at M10 turned this from a caveat into an arithmetic obstruction: the alarm §10.1 specifies (23 days) would fire on *every healthy saga*, because the default grace window alone exceeds it. So the metric ships emitted and dashboarded with no threshold, and the number an operator sees is the size of this conflict. Answering the question is what makes the alarm buildable.
 5. **The 15-minute saga ceiling.** Realistic manifests complete in seconds, but a 200-participant tenant would not. Chunk the phase across invocations, or move the executor to AgentCore Runtime's 8-hour async ceiling and give up the "saga cannot call Bedrock" IAM claim? Decide deliberately.
 6. **Checkpoint serialization ownership.** `DynamoDBSaver` is AWS-maintained and pinned, but it is younger than the Postgres saver it replaced. Is the upgrade canary sufficient, or does a paused saga need a version-tagged checkpoint envelope with an explicit migration path?
 7. ~~**The OpenSearch Serverless OCU floor dominates the bill.** Is teaching the derived-index archetype worth a continuous charge?~~ **Resolved by [ADR-021](adr/ADR-021-s3-vectors-for-cost.md):** participant #6 moved to S3 Vectors, purely on cost. The archetype survives with a sharper lesson (no delete-by-query; an embedding is personal data) and the stack no longer has any continuously-billing component. The Athena-backed substitute floated here was rejected — `analytics-lake` already teaches the columnar lesson, so it would have left the derived-store lesson untaught. Kept visible rather than deleted: an open question that got answered is worth more on the record than one that quietly disappears.

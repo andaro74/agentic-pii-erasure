@@ -11,6 +11,7 @@ from collections.abc import Callable
 from typing import Any
 
 from pii_erasure.saga.deps import SagaDeps
+from pii_erasure.saga.nodes._shared import iso
 from pii_erasure.saga.state import STATUS_ALREADY_TOMBSTONED, STATUS_RUNNING
 
 _REQUIRED = ("saga_id", "subject_ref", "request_id", "tenant_id")
@@ -41,6 +42,12 @@ def make_intake(deps: SagaDeps) -> Callable[[dict[str, Any]], dict[str, Any]]:
             )
             return {"status": STATUS_ALREADY_TOMBSTONED}
 
+        # Read-then-write, not recomputed: `started_at` is `set_once`, and a second write
+        # with a *different* value raises. Every other set_once field is derived from a
+        # manifest or a participant and so replays identically; this one is derived from
+        # the clock, which is the one thing a re-executed node cannot reproduce.
+        started_at = str(state.get("started_at") or iso(deps.now()))
+
         deps.ledger.append(
             saga_id=saga_id,
             event_type="SAGA_STARTED",
@@ -48,8 +55,9 @@ def make_intake(deps: SagaDeps) -> Callable[[dict[str, Any]], dict[str, Any]]:
                 "subjectRef": subject_ref,
                 "requestId": str(state["request_id"]),
                 "tenantId": str(state["tenant_id"]),
+                "startedAt": started_at,
             },
         )
-        return {"phase": 1, "status": STATUS_RUNNING}
+        return {"phase": 1, "status": STATUS_RUNNING, "started_at": started_at}
 
     return intake

@@ -21,7 +21,12 @@ from langgraph.types import interrupt
 
 from pii_erasure.approval.gate import ResumeValidationError, interrupt_payload, parse_resume
 from pii_erasure.saga.deps import SagaDeps
-from pii_erasure.saga.nodes._shared import digest_from_state, iso, manifest_from_state
+from pii_erasure.saga.nodes._shared import (
+    digest_from_state,
+    emit_elapsed,
+    iso,
+    manifest_from_state,
+)
 from pii_erasure.saga.state import STATUS_RUNNING
 from pii_erasure.scheduler.base import ScheduleRequest
 
@@ -56,6 +61,12 @@ def make_approval_gate(deps: SagaDeps) -> Callable[[dict[str, Any]], dict[str, A
                 "status": STATUS_APPROVAL_INVALID,
                 "errors": [{"node": "approval_gate", "error": type(error).__name__}],
             }
+
+        # A decision arrived — approve, deny, or the timeout wake that means DENY. All
+        # three stop the clock §10.1 is asking about; an invalid resume above does not,
+        # because nobody decided anything. Emitted before the branch so the histogram is
+        # not quietly a histogram of approvals only.
+        emit_elapsed(deps, state, "approval.time_to_decision")
 
         if resume.decision != "approve":
             # Denial and timeout land in the same place: unwind. Silence implies DENY.

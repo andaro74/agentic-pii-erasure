@@ -185,7 +185,11 @@ def test_a_named_emitter_really_emits_that_metric(spec: m.MetricSpec) -> None:
     assert f'"{spec.name}"' in source, (
         f"{spec.emitter} is recorded as the emitter of {spec.name} but never names it"
     )
-    assert "emit(" in source, f"{spec.emitter} never calls emit()"
+    # `emit(` or `emit_elapsed(`: the two duration metrics go through a helper that owns
+    # the "start moment unknown → publish nothing" rule, so it exists in one place rather
+    # than at every call site. The name still has to appear here, which is the half of
+    # this check that catches a metric wired to the wrong emitter.
+    assert re.search(r"\bemit\w*\(", source), f"{spec.emitter} calls no emit function"
 
 
 def test_every_metric_is_either_emitted_noted_or_pending() -> None:

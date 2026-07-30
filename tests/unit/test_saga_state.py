@@ -9,14 +9,16 @@ protects recall.
 
 from __future__ import annotations
 
-from typing import Annotated, Any, TypedDict
+from typing import Annotated, Any, TypedDict, get_args, get_type_hints
 
 import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
+from langgraph.types import Command, interrupt
 
 from pii_erasure.saga.state import (
     ReducerConflictError,
+    SagaState,
     append_unique,
     last_value,
     merge_unique,
@@ -74,6 +76,18 @@ def test_set_once_raises_on_overwrite() -> None:
 
 def test_set_once_keeps_current_on_none() -> None:
     assert set_once("kept", None) == "kept"
+
+
+def test_started_at_is_write_once_rather_than_last_value() -> None:
+    """The anchor for both duration metrics in §10.1, so which reducer holds it matters.
+
+    Under `last_value` a re-executed intake would quietly move the start forward and every
+    duration would shrink toward zero — an SLO that reports better the more the saga
+    retries. `set_once` makes that a loud failure instead, which is why `intake` reads the
+    field before writing it.
+    """
+    annotation = get_type_hints(SagaState, include_extras=True)["started_at"]
+    assert set_once in get_args(annotation), "started_at is not reduced by set_once"
 
 
 def test_set_once_treats_channel_default_empties_as_unset() -> None:
@@ -139,3 +153,53 @@ def test_concurrent_conflicting_writes_fail_loudly_not_silently() -> None:
             {"receipts": {"soft_delete:profile-store": {"outcome": "APPLIED"}}},
             {"receipts": {"soft_delete:profile-store": {"outcome": "REFUSED"}}},
         )
+
+
+# ─── adding a state key to a graph with live paused threads ───────────────────────────
+
+
+class _Before(TypedDict, total=False):
+    seen: Annotated[list[str], append_unique]
+
+
+class _After(TypedDict, total=False):
+    seen: Annotated[list[str], append_unique]
+    started_at: Annotated[str | None, set_once]
+
+
+def _gate_graph(schema: Any, saver: InMemorySaver) -> Any:
+    """A one-node graph that pauses at an interrupt, so there is a checkpoint to resume."""
+
+    def gate(_state: dict[str, Any]) -> dict[str, Any]:
+        answer = interrupt({"gate": "test"})
+        return {"seen": [str(answer)]}
+
+    builder = StateGraph(schema)
+    builder.add_node("gate", gate)
+    builder.add_edge(START, "gate")
+    builder.add_edge("gate", END)
+    return builder.compile(checkpointer=saver)
+
+
+def test_a_checkpoint_written_before_a_field_existed_resumes_on_the_graph_that_has_it() -> None:
+    """The compatibility claim `started_at` rests on — checked, not remembered.
+
+    Every saga paused at an approval gate right now was checkpointed by a graph whose
+    state schema had no `started_at`. Those threads must resume on the graph that does and
+    simply not carry the field. This is invariant 9's failure mode approached from our own
+    side rather than the framework's: a resume that cannot deserialize strands a live
+    erasure request silently, past a statutory deadline, and if langgraph required the
+    channel sets to match then an additive state key would do exactly that.
+
+    A version bump gets `make upgrade-canary`. A state-shape change gets this.
+    """
+    saver = InMemorySaver()
+    config = {"configurable": {"thread_id": "schema_change"}}
+
+    paused = _gate_graph(_Before, saver).invoke({}, config, durability="sync")
+    assert paused["__interrupt__"], "nothing paused, so the resume below would prove nothing"
+
+    resumed = _gate_graph(_After, saver).invoke(Command(resume="answer"), config, durability="sync")
+
+    assert resumed["seen"] == ["answer"]
+    assert "started_at" not in resumed, "the new channel invented a value for an old thread"

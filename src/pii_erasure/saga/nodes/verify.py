@@ -11,7 +11,11 @@ from typing import Any
 
 from pii_erasure.observability.metrics import emit
 from pii_erasure.saga.deps import SagaDeps
-from pii_erasure.saga.nodes._shared import manifest_from_state, verify_all_participants
+from pii_erasure.saga.nodes._shared import (
+    emit_elapsed,
+    manifest_from_state,
+    verify_all_participants,
+)
 from pii_erasure.saga.state import STATUS_STUCK
 
 
@@ -36,6 +40,15 @@ def make_verify(deps: SagaDeps) -> Callable[[dict[str, Any]], dict[str, Any]]:
             sum(int(item["remainingCount"]) for item in unexpected),
             deps.metric_dimensions("saga"),
         )
+
+        # The statutory clock stops HERE, and this is the only node it could stop at.
+        # `sweep` is where `status` becomes `completed`, but it gets there after the T+30
+        # re-verification — a month *past* the answer the subject is owed. A duration
+        # measured at the graph's END would therefore exceed any deadline-shaped
+        # threshold on every healthy saga, which is an alarm nobody can leave switched
+        # on. Art. 12(3) asks when the request was answered, and T+0 verification is
+        # when it was.
+        emit_elapsed(deps, state, "saga.duration")
 
         if unexpected:
             deps.dead_letters.send(
