@@ -41,16 +41,27 @@ _LINK = re.compile(r"(?<!!)\[(?:[^\[\]]|\[[^\]]*\])*\]\(([^)\s]+)(?:\s+\"[^\"]*\
 _EXTERNAL = ("http://", "https://", "mailto:", "tel:", "ftp://")
 
 
+#: Directory names holding code this repo did not write. `build/` and the cloud
+#: assemblies stage the Lambda and Runtime assets — thousands of vendored READMEs whose
+#: links are their authors' problem, not ours.
+_NOT_OURS = {"build", ".venv", "node_modules", ".git", "__pycache__"}
+
+
+def _is_generated(part: str) -> bool:
+    """True for a directory this repo generates rather than authors.
+
+    Cloud assemblies are matched by PREFIX, not by exact name. `cdk.out` was listed
+    literally, so when the deploy targets got their own `cdk.out.deploy` (V13-10) the
+    scan walked straight into it and graded vendored markdown inside a staged asset.
+    An exclusion list keyed on exact names is a list that the next generated directory
+    escapes — and this one escaped it within a day.
+    """
+    return part in _NOT_OURS or part.startswith("cdk.out")
+
+
 def _markdown_files() -> list[Path]:
     files = [
-        path
-        for path in REPO.rglob("*.md")
-        # `build/` holds the staged Lambda and Runtime assets — thousands of vendored
-        # READMEs whose links are their authors' problem, not ours.
-        if not any(
-            part in {"build", ".venv", "node_modules", ".git", "cdk.out", "__pycache__"}
-            for part in path.parts
-        )
+        path for path in REPO.rglob("*.md") if not any(_is_generated(part) for part in path.parts)
     ]
     assert len(files) > 20, "the markdown scan found almost nothing — wrong directory?"
     return files
