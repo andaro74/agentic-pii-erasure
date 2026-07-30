@@ -256,6 +256,29 @@ class Dimensions:
             out["systemId"] = self.system_id
         return out
 
+    def dimension_sets(self) -> list[list[str]]:
+        """The dimension **sets** to publish under — always including the base set.
+
+        A dimension set is part of a metric's identity in CloudWatch, not an annotation on
+        it: `{stage, plane}` and `{stage, plane, systemId}` are two different metrics that
+        happen to share a name. EMF creates a metric for each set listed here and **no
+        rollup across them**, so publishing only the wide set means an alarm written
+        against the narrow one never receives a data point — it sits in
+        `INSUFFICIENT_DATA`, or, once `TreatMissingData` is `NOT_BREACHING` as every alarm
+        here sets it, renders permanently green (V13-8).
+
+        So `{plane, stage}` is emitted unconditionally and the wider set is emitted
+        *as well* when there is an optional dimension. The alarms and the dashboard are
+        written against the base set — one shape, whatever the call site passes — and the
+        wide set answers the operator's first question, *which system*.
+
+        The cost is one extra custom metric per unique combination, and the combinations
+        stay bounded because `Dimensions` is a closed shape over low-cardinality fields.
+        """
+        base = ["plane", "stage"]
+        wide = sorted(self.as_dict())
+        return [base] if wide == base else [base, wide]
+
 
 class MetricError(RuntimeError):
     """The metric or its dimensions are not something this platform measures.
@@ -300,8 +323,9 @@ def emf_document(
                 {
                     "Namespace": NAMESPACE,
                     # An array of dimension SETS; each set is an array of member names
-                    # that must also exist on the root node.
-                    "Dimensions": [sorted(dims)],
+                    # that must also exist on the root node. The base set is always one of
+                    # them — see `Dimensions.dimension_sets`.
+                    "Dimensions": dimensions.dimension_sets(),
                     "Metrics": [{"Name": spec.name, "Unit": spec.unit}],
                 }
             ],

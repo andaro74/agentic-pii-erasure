@@ -1,9 +1,13 @@
 """The §10.1 metric registry, the EMF documents it builds, and its agreement with the doc.
 
 Three things must say the same thing about what this platform measures: ARCHITECTURE
-§10.1's table, `observability/metrics.py`'s registry, and (once it lands)
-`infra/stacks/observability.py`'s alarms. Two of the three are asserted here; the third
-arrives with the stack.
+§10.1's table, `observability/metrics.py`'s registry, and `infra/stacks/observability.py`'s
+alarms. The first two are asserted here; the third is `test_observability_synth.py`, which
+reads the synthesised template rather than the stack source.
+
+**Agreement is over name *and dimension set*, not name alone.** That distinction is V13-8:
+a CloudWatch metric is identified by both, so three checks that compared only names all
+passed while an alarm watched a combination nothing published.
 
 The agreement is the whole point. **An alarm on a metric nothing publishes is worse than
 no alarm**: it renders green and can never fire, so it actively reports health. That is the
@@ -122,12 +126,66 @@ def test_every_metric_builds_a_specification_shaped_document(spec: m.MetricSpec)
     assert definition["Unit"] in _SPEC_UNITS, f"{definition['Unit']} is not a CloudWatch unit"
 
     # Targets MUST be members of the ROOT node, never nested, and metric targets MUST be
-    # numeric while dimension targets MUST be strings.
-    for key in directive["Dimensions"][0]:
-        assert key in document, f"dimension {key} is not a root member"
-        assert isinstance(document[key], str)
+    # numeric while dimension targets MUST be strings. Checked for EVERY set, not just the
+    # first — a set whose members are not on the root node is dropped by CloudWatch, and
+    # dropping the wide set silently would look identical to not publishing it.
+    for dimension_set in directive["Dimensions"]:
+        for key in dimension_set:
+            assert key in document, f"dimension {key} is not a root member"
+            assert isinstance(document[key], str)
     assert isinstance(document[spec.name], (int, float))
     assert not isinstance(document[spec.name], bool)
+
+
+# ─── the dimension SET, which is part of the metric's identity ────────────────────────
+
+
+@pytest.mark.parametrize(
+    "dimensions",
+    [
+        m.Dimensions(stage="dev", plane="saga"),
+        m.Dimensions(stage="dev", plane="saga", system_id="billing-ledger"),
+        m.Dimensions(stage="dev", plane="policy", system_id="subject.hard_delete"),
+    ],
+    ids=["base", "per-participant", "per-action"],
+)
+def test_the_base_dimension_set_is_published_whatever_the_call_site_passes(
+    dimensions: m.Dimensions,
+) -> None:
+    """V13-8, and the fourth way to build an alarm that cannot fire.
+
+    `{stage, plane}` and `{stage, plane, systemId}` are two different metrics in
+    CloudWatch that share a name; EMF rolls up across neither. `hard_delete` dimensioned
+    `phase3.stuck_participants` by participant, so the §10.1 alarm — written against
+    `{stage, plane}`, as every alarm in the stack is — watched a combination nothing ever
+    published. With `TreatMissingData: NOT_BREACHING` it rendered green forever, on the
+    one metric whose whole purpose is to say a statutory deadline is forming.
+
+    So the base set is emitted unconditionally. This is the property the alarms rest on.
+    """
+    sets = m.emf_document("phase3.stuck_participants", 1, dimensions)["_aws"]["CloudWatchMetrics"][
+        0
+    ]["Dimensions"]
+    assert ["plane", "stage"] in sets, (
+        f"{sets} omits the base set, so every alarm on this metric watches nothing"
+    )
+
+
+def test_an_optional_dimension_adds_a_set_rather_than_replacing_one() -> None:
+    """The per-participant breakdown must survive too — "which system is stuck" is the
+    operator's first question, and answering it is why the dimension was added at all."""
+    dimensions = m.Dimensions(stage="dev", plane="saga", system_id="billing-ledger")
+    sets = m.emf_document("phase3.stuck_participants", 1, dimensions)["_aws"]["CloudWatchMetrics"][
+        0
+    ]["Dimensions"]
+    assert sets == [["plane", "stage"], ["plane", "stage", "systemId"]]
+
+
+def test_the_base_set_is_not_duplicated_when_there_is_nothing_to_widen() -> None:
+    """A repeated set would bill twice for one metric and is what a naive `[base, wide]`
+    produces when they are equal."""
+    sets = m.Dimensions(stage="dev", plane="saga").dimension_sets()
+    assert sets == [["plane", "stage"]]
 
 
 def test_an_unregistered_metric_is_refused() -> None:

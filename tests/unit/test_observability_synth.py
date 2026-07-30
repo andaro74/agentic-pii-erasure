@@ -16,6 +16,7 @@ decided not to".
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -33,10 +34,16 @@ from stacks.observability import (  # noqa: E402 — needs the path insert above
     NOT_ALARMED,
     STACK_PUBLISHED,
     ObservabilityStack,
+    _plane_of,
     alarmed_metrics,
 )
 
 STAGE = "test"
+
+#: How each emitter names the `plane` dimension at its call site. `plane="x"` covers the
+#: modules that build `Dimensions` directly; `metric_dimensions("x")` covers the saga
+#: nodes, which go through `SagaDeps` so every node agrees.
+_PLANE_AT_CALL_SITE = re.compile(r'plane="(\w+)"|metric_dimensions\(\s*"(\w+)"')
 
 
 @pytest.fixture(scope="module")
@@ -107,6 +114,84 @@ def test_alarms_treat_missing_data_as_not_breaching(spec: Any, template: Any) ->
     properties = _alarms(template)[spec.name]
     assert properties["TreatMissingData"] == "notBreaching", (
         f"{spec.name} would sit in INSUFFICIENT_DATA between events"
+    )
+
+
+@pytest.mark.parametrize("spec", alarmed_metrics(), ids=lambda s: s.name)
+def test_every_alarm_watches_a_dimension_set_the_emitter_publishes(
+    spec: Any, template: Any
+) -> None:
+    """The fourth way to build an alarm that cannot fire, and the one V13-8 shipped.
+
+    A dimension set is part of a metric's identity: `{stage, plane}` and
+    `{stage, plane, systemId}` are two metrics sharing a name, and EMF rolls up across
+    neither. `hard_delete` dimensioned `phase3.stuck_participants` by participant while
+    this stack alarmed on `{stage, plane}` — so the alarm watched a combination nothing
+    published, and `TreatMissingData: NOT_BREACHING` rendered it green rather than
+    `INSUFFICIENT_DATA`, which is the *only* state the other three checks in this file
+    look for.
+
+    The equality is asserted against `Dimensions.dimension_sets()` rather than against a
+    literal, so the emitter is what defines the answer. Widening the alarm without
+    widening the emitter fails here.
+    """
+    from pii_erasure.observability.metrics import Dimensions
+
+    alarmed = {d["Name"] for d in _alarms(template)[spec.name]["Dimensions"]}
+    # What the emitter would publish at its *widest* call site: system_id set. The base
+    # set has to be in there, and the alarm has to be the base set.
+    published = Dimensions(stage=STAGE, plane="saga", system_id="any").dimension_sets()
+    assert sorted(alarmed) in published, (
+        f"{spec.name}'s alarm watches {sorted(alarmed)}, which is not one of the "
+        f"dimension sets the emitter publishes ({published}) — it can never receive a "
+        f"data point, and NOT_BREACHING makes that look healthy rather than unknown"
+    )
+
+
+def test_the_stack_alarms_on_the_base_dimension_set_and_nothing_wider(template: Any) -> None:
+    """The other half: the alarm set must be the one that is published *unconditionally*.
+
+    A per-participant alarm would be correct only for the call sites that pass a
+    `systemId`, and `hard_delete` emits `manifest.digest_mismatch` without one. One shape
+    for every alarm is what makes `_alarm` generic rather than per-metric."""
+    for name, properties in _alarms(template).items():
+        assert sorted(d["Name"] for d in properties["Dimensions"]) == ["plane", "stage"], (
+            f"{name} is alarmed on a wider set than every call site guarantees"
+        )
+
+
+@pytest.mark.parametrize("spec", [s for s in METRICS if s.emitter], ids=lambda s: s.name)
+def test_the_plane_the_stack_alarms_on_is_the_plane_the_emitter_writes(spec: Any) -> None:
+    """`_plane_of` says it derives the plane "so the two cannot drift silently" — and
+    nothing was checking, which is a no-drift claim with no mechanism behind it.
+
+    The dimension's VALUE is as much a part of the metric's identity as its key, so
+    alarming on `plane=saga` while `policy/engine.py` emits `plane=policy` is the same
+    dead alarm as V13-8 reached from one field over.
+    """
+    assert spec.emitter is not None
+    relative = Path(*spec.emitter.split(".")).with_suffix(".py")
+    for base in (REPO / "src" / "pii_erasure", REPO):
+        if (base / relative).is_file():
+            source = (base / relative).read_text(encoding="utf-8")
+            break
+    else:  # pragma: no cover — test_metrics.py fails first on a bad emitter path
+        raise AssertionError(f"{spec.emitter} names no module")
+
+    # The two duration metrics go through `_shared.emit_elapsed`, which owns the "start
+    # moment unknown → publish nothing" rule; the plane is set there rather than at the
+    # node. Follow the helper rather than exempting its callers, or the metric with the
+    # longest fuse — time to approval decision — would be the one nothing checked.
+    if "emit_elapsed" in source:
+        source += (REPO / "src" / "pii_erasure" / "saga" / "nodes" / "_shared.py").read_text(
+            encoding="utf-8"
+        )
+
+    planes = {a or b for a, b in _PLANE_AT_CALL_SITE.findall(source)}
+    assert planes, f"{spec.emitter} sets no plane dimension this test can read"
+    assert _plane_of(spec) in planes, (
+        f"the stack alarms {spec.name} on plane={_plane_of(spec)!r} but {spec.emitter} "
+        f"emits plane={planes} — the alarm watches a metric nobody writes"
     )
 
 

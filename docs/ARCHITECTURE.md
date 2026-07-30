@@ -853,7 +853,16 @@ The "generated, not labelled" property is what makes the gate trustworthy, and i
 
 **What it costs.** The recall gate now requires a deployed AWS stack and therefore an account, credentials, and money. That is a real regression against the previous hermetic CI, stated plainly rather than glossed. The mitigation is an ephemeral per-PR eval stack that is created, seeded, evaluated, and destroyed in one workflow — not a mock.
 
-**AgentCore Evaluations** runs the same assertions continuously against the deployed dev stack, using its built-in evaluators for trajectory and tool-use conformance alongside the custom recall evaluator. The repo's `evals/run.py` remains the **gate of record** for merges; AgentCore Evaluations is the monitoring surface for drift after merge.
+**AgentCore Evaluations** is the intended drift monitor: the same assertions run continuously against the deployed dev stack, using its built-in evaluators for trajectory and tool-use conformance alongside the custom recall evaluator. `evals/run.py` remains the **gate of record** for merges; the monitor watches for drift *after* merge.
+
+> **Not built (V13-9).** M10's Build line listed it and nothing in `infra/`, `evals/` or
+> `.github/` creates it — the sentence above was written in the present tense for a
+> component that does not exist. Marked rather than deleted, because the design decision
+> (monitor ≠ gate, [ADR-020](adr/ADR-020-deployed-eval-gate.md)) still stands and
+> `discovery.recall` is already emitted from the gate of record, which is where the
+> dashboard's number comes from today. What is missing is the *continuous* half: between
+> merges, nothing re-runs the assertions, so drift in the deployed dev stack is invisible
+> until the next PR. Neither M10 gate covers it, which is how it survived the milestone.
 
 ### 11.3 Evaluator suite
 

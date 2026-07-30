@@ -180,6 +180,13 @@ class ObservabilityStack(Stack):
             metric=cloudwatch.Metric(
                 namespace=NAMESPACE,
                 metric_name=spec.name,
+                # The BASE dimension set, which `Dimensions.dimension_sets()` publishes
+                # unconditionally. A dimension set is part of a metric's identity and EMF
+                # rolls up across none of them, so alarming on `{stage, plane, systemId}`
+                # would be correct only for the call sites that pass a participant —
+                # `hard_delete` emits `manifest.digest_mismatch` without one. Before
+                # V13-8 the emitter published only the wide set and this alarm watched a
+                # combination nothing wrote.
                 dimensions_map={"stage": self.stage, "plane": _plane_of(spec)},
                 statistic=spec.statistic,
                 period=_PERIOD,

@@ -330,6 +330,15 @@ There is no local mode ([ADR-017](adr/ADR-017-real-aws-participants.md)), so fro
 > gate, against the roadmap's own rule that every milestone from M2 has two. Written at
 > the start of the milestone so "done" was defined before the work, not after it.
 
+> **The closing pass found one more alarm defect and one unbuilt item.** V13-8: every
+> alarm watched `{stage, plane}` while `hard_delete` published `phase3.stuck_participants`
+> only under `{stage, plane, systemId}` — a fourth way to build an alarm that cannot fire,
+> missed because all three agreement checks compared metric *names* and a CloudWatch
+> metric is identified by its name **and** its dimension set. Fixed, with the expected set
+> now derived from the emitter. V13-9: **AgentCore Evaluations is not built.** It is on the
+> Build line above and in no gate below, which is how it survived — §11.2 now marks it
+> rather than claiming it. The hermetic gate passes; that item is the open one.
+
 **Deployed done when:** the per-PR workflow creates, seeds, evaluates, and destroys a stack in one run, with no leaked resources · one documented production-shaped run with real Bedrock, its cost recorded · an idle dev stack left up for 24h costs cents, evidenced from Cost Explorer · the dashboard shows real data points for every emitted metric, and no alarm sits in `INSUFFICIENT_DATA`.
 
 **Traps:** `make deploy` (prod) is human-only and denied in `.claude/settings.json` · teardown runs on `always()`, not on success — a failed run must not leak resources even though none of them now bill a floor · the break-glass merge path from [ADR-020](adr/ADR-020-deployed-eval-gate.md) is a logged exception, never a default · **anything account-wide must be unreachable from `--all`**: a budget in a stage stack is created per PR and deleted on teardown, so a green build disarms the cost guardrail · a per-stage budget filtered by tag is not the fix — cost-allocation tags must be activated by hand in the Billing console, so the filter matches nothing and the budget reports $0.00 forever.
