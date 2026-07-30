@@ -863,6 +863,21 @@ The "generated, not labelled" property is what makes the gate trustworthy, and i
 > dashboard's number comes from today. What is missing is the *continuous* half: between
 > merges, nothing re-runs the assertions, so drift in the deployed dev stack is invisible
 > until the next PR. Neither M10 gate covers it, which is how it survived the milestone.
+>
+> **Deferred deliberately (2026-07-30)** to a follow-up build where it is the subject
+> rather than a line item. The shape it should take is already clear and is recorded here
+> so the next attempt does not restart from the brochure: a **programmatic trajectory
+> evaluator** over sampled discovery sessions, asserting the tool sequence. That is the
+> one evaluator family which consumes no judge tokens — so it costs approximately nothing
+> and keeps ADR-021's rule intact — and it is the one that says something this
+> architecture cannot otherwise say. Invariant 1's three controls are all *preventive*
+> (tool list, Cedar permit, Gateway filtering); a trajectory score over real sessions is
+> *detective*, and "it cannot" plus "it did not" is a materially stronger claim than
+> either alone. `AWS::BedrockAgentCore::Evaluator` and
+> `AWS::BedrockAgentCore::OnlineEvaluationConfig` exist as L1 CloudFormation resources —
+> no L2 constructs yet, so the IAM wiring is by hand. Online sampling needs traffic
+> volume a demo stack does not have; batch evaluation over recorded sessions is the
+> better fit there. Needs its own ADR: it is a new AWS surface.
 
 ### 11.3 Evaluator suite
 

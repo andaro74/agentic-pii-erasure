@@ -313,7 +313,7 @@ There is no local mode ([ADR-017](adr/ADR-017-real-aws-participants.md)), so fro
 
 ## - [ ] M10 · Production posture
 
-**Build:** `observability/metrics.py` (§10.1's metrics, emitted as CloudWatch EMF — nothing published them before M10) · `infra/stacks/observability.py` (alarms and a dashboard, and **no alarm for a metric nothing emits**) · AgentCore Evaluations wired against the dev stack as the drift monitor · cost controls (a synth-time check that no service carries a provisioned floor without an ADR — the rule [ADR-021](adr/ADR-021-s3-vectors-for-cost.md) established; budget alarms) · a documented teardown drill, including the Object Lock retention constraint.
+**Build:** `observability/metrics.py` (§10.1's metrics, emitted as CloudWatch EMF — nothing published them before M10) · `infra/stacks/observability.py` (alarms and a dashboard, and **no alarm for a metric nothing emits**) · ~~AgentCore Evaluations wired against the dev stack as the drift monitor~~ (deferred — see below) · cost controls (a synth-time check that no service carries a provisioned floor without an ADR — the rule [ADR-021](adr/ADR-021-s3-vectors-for-cost.md) established; budget alarms) · a documented teardown drill, including the Object Lock retention constraint.
 
 > **`.github/workflows/` already existed** — three jobs, OIDC, ephemeral per-PR stack with
 > `always()` teardown, built at M0 so CI was green from commit zero. The Build line listed
@@ -337,7 +337,12 @@ There is no local mode ([ADR-017](adr/ADR-017-real-aws-participants.md)), so fro
 > metric is identified by its name **and** its dimension set. Fixed, with the expected set
 > now derived from the emitter. V13-9: **AgentCore Evaluations is not built.** It is on the
 > Build line above and in no gate below, which is how it survived — §11.2 now marks it
-> rather than claiming it. The hermetic gate passes; that item is the open one.
+> rather than claiming it.
+>
+> **Deferred by decision on 2026-07-30**, not left open: the drift monitor is scoped to a
+> follow-up demo built around it, where continuous evaluation is the subject rather than a
+> footnote. M10's Build line keeps the item struck through rather than deleted, because
+> what a milestone *chose not to* build is worth as much to a reader as what it did.
 
 **Deployed done when:** the per-PR workflow creates, seeds, evaluates, and destroys a stack in one run, with no leaked resources · one documented production-shaped run with real Bedrock, its cost recorded · an idle dev stack left up for 24h costs cents, evidenced from Cost Explorer · the dashboard shows real data points for every emitted metric, and no alarm sits in `INSUFFICIENT_DATA`.
 
