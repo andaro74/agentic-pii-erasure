@@ -57,12 +57,22 @@
 #   inventing a release. What must never happen is a summary claiming both were canaried
 #   when one never moved.
 #
+# WHERE THE PINS LIVE — TWO PACKAGES, THREE FILES
+#
+#   pyproject.toml (what the tests run against) · requirements.lock (generated from it)
+#   · the Makefile's SAGA_PINS (what `make package` installs into the saga Lambda).
+#   Bumping two of the three made this script unable to pass at all (V12-6), and the
+#   contract test now derives that file list from the tree rather than restating it.
+#
 # ON FAILURE
 #
-#   pyproject.toml and requirements.lock are restored, and the exit is non-zero. The
-#   DEPLOYED stack is left on the new versions — restoring code is cheap, redeploying is
-#   not, and a human deciding what to do next needs the broken state to look at.
-#   The paused thread is left paused. It is evidence.
+#   pyproject.toml, the Makefile and requirements.lock are restored, and the exit is
+#   non-zero. The DEPLOYED stack is left on the new versions — restoring code is cheap,
+#   redeploying is not, and a human deciding what to do next needs the broken state to
+#   look at. The paused thread is left paused. It is evidence.
+#
+#   The venv is left on the new versions too, and `restore()` says so — but only when
+#   `make install` actually ran (V12-7b).
 
 set -euo pipefail
 
@@ -79,6 +89,10 @@ LOCKFILE="$REPO/requirements.lock"
 #: script now runs before spending a deploy.
 MAKEFILE="$REPO/Makefile"
 BACKUP_DIR="$(mktemp -d)"
+
+#: Set the moment `make install` puts the target versions into the venv, so `restore()`
+#: only warns about an environment it actually changed.
+INSTALLED_TARGETS=no
 
 TARGET_LANGGRAPH="${1:-}"
 TARGET_CHECKPOINT="${2:-}"
@@ -99,9 +113,17 @@ restore() {
   # `make check` fails on `test_the_installed_versions_match_the_pins` until it is fixed —
   # correctly, since a checkpoint-shaped test result from the wrong version is worthless.
   # Saying so here is the difference between a deliberate state and a confusing one.
-  echo "⚠  the venv still has the TARGET versions installed. That is deliberate — inspect"
-  echo "   the failure on the versions that caused it. \`make check\` will fail on"
-  echo "   test_the_installed_versions_match_the_pins until you run:  make install"
+  #
+  # Guarded, because `make lock` runs first and can fail before the venv is ever touched.
+  # An unconditional warning sent an operator to reinstall an environment nothing had
+  # changed, which is how a true warning stops being read (V12-7b).
+  if [ "$INSTALLED_TARGETS" = yes ]; then
+    echo "⚠  the venv still has the TARGET versions installed. That is deliberate — inspect"
+    echo "   the failure on the versions that caused it. \`make check\` will fail on"
+    echo "   test_the_installed_versions_match_the_pins until you run:  make install"
+  else
+    echo "   The venv was never modified — the run failed before \`make install\`."
+  fi
 }
 trap 'code=$?; if [ $code -ne 0 ]; then restore; echo "❌ upgrade canary FAILED (exit $code)" >&2; fi; rm -rf "$BACKUP_DIR"; exit $code' EXIT
 
@@ -168,6 +190,7 @@ if [ -n "$TARGET_LANGGRAPH" ]; then
   [ "$(shipped_pin langgraph-checkpoint-aws)" = "$TARGET_CHECKPOINT" ] || { echo "❌ SAGA_PINS still ships the old checkpoint-aws" >&2; exit 1; }
   make lock
   make install
+  INSTALLED_TARGETS=yes
   # Hermetic first, and before the deploy. A new version that breaks an API we call
   # would otherwise surface as a mysterious resume failure four minutes later, after a
   # deploy paid for; `make check` turns that into three named unit failures for free.

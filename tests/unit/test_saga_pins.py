@@ -45,6 +45,39 @@ def test_the_makefile_ships_exactly_the_pyproject_pins() -> None:
     )
 
 
+def test_the_lock_target_pins_its_own_tooling() -> None:
+    """`make lock` is the mechanism invariant 9 names, and it was the least pinned thing
+    in the repo.
+
+    `pip install -q pip-tools`, unpinned, against whatever pip the venv had. pip-tools
+    imports `pip._internal.utils.compat.stdlib_pkgs`, a private symbol pip 26 removed, so
+    the target failed for whoever had upgraded pip and worked for everyone else — and it
+    is called by exactly one thing, the release canary, so nothing noticed until that ran
+    (V12-7).
+
+    Both tools pinned, in a throwaway venv: locking must not depend on which pip a
+    developer has, and must not mutate the project venv's pip as a side effect.
+    """
+    makefile = (REPO / "Makefile").read_text(encoding="utf-8")
+    tools = re.search(r"^LOCK_TOOLS\s*:=\s*(.+)$", makefile, re.MULTILINE)
+    assert tools, "LOCK_TOOLS is gone — `make lock` is installing its tooling unpinned again"
+    assert re.search(r'"pip<\d|"pip==\d', tools.group(1)), (
+        "the pip version is unconstrained; pip 26 removed the private symbol pip-tools "
+        "imports, so this is the constraint that matters"
+    )
+    assert re.search(r'"pip-tools==\d', tools.group(1)), "pip-tools is not pinned exactly"
+
+    lock_target = makefile[makefile.index("\nlock:") :]
+    lock_target = lock_target[: lock_target.index("\n.PHONY")]
+    assert "$(LOCK_ENV_BIN)/python -m piptools" in lock_target, (
+        "the compile step no longer runs from the isolated venv — regenerating a lockfile "
+        "must not change the project venv"
+    )
+    assert lock_target.count("rm -rf $(LOCK_ENV)") == 2, (
+        "the tool venv must be removed before and after: it is a tool, not an environment"
+    )
+
+
 def test_the_installed_versions_match_the_pins() -> None:
     """The environment running these tests is the claim's third leg."""
     from importlib.metadata import version

@@ -11,6 +11,14 @@ RUFF := $(VENV_BIN)/ruff
 MYPY := $(VENV_BIN)/mypy
 PYTEST := $(VENV_BIN)/pytest
 
+# `make lock` runs pip-tools in a throwaway venv with BOTH tools pinned. pip-tools
+# imports pip's private internals, so an unpinned install against an arbitrary pip is a
+# mechanism that breaks on somebody else's machine and nowhere else (V12-7). `pip<26` is
+# the constraint that matters: pip 26 removed `stdlib_pkgs`.
+LOCK_ENV := .lockenv
+LOCK_ENV_BIN := $(if $(filter .venv/Scripts,$(VENV_BIN)),$(LOCK_ENV)/Scripts,$(LOCK_ENV)/bin)
+LOCK_TOOLS := "pip<26" "pip-tools==7.6.0"
+
 # src and tests exist from commit zero; infra lands at M0, evals and seeds at
 # M4/M7. Lint only the dirs that exist so `make check` is green at commit zero,
 # and pick them up automatically the moment they appear — the same "becomes
@@ -52,8 +60,20 @@ install: ## Create venv and install (lockfile-constrained) with dev extras
 
 .PHONY: lock
 lock: ## Regenerate requirements.lock from the runtime deps (invariant 9 mechanism)
-	$(PY) -m pip install -q pip-tools
-	$(PY) -m piptools compile --quiet --strip-extras -o requirements.lock pyproject.toml
+	@# pip-tools reaches into pip's PRIVATE internals — `pip._internal.utils.compat`
+	@# .stdlib_pkgs, which pip 26 removed. `pip install pip-tools` unpinned against
+	@# whatever pip the venv happened to have therefore broke the one mechanism
+	@# invariant 9 names, and broke it only for whoever had upgraded pip (V12-7).
+	@#
+	@# So both tools are pinned, and installed into a venv of their own: locking must not
+	@# depend on which pip a developer has, and must not change the project venv's pip as
+	@# a side effect of regenerating a lockfile. Torn down either way — it is a tool, not
+	@# an environment.
+	@rm -rf $(LOCK_ENV)
+	$(PY) -m venv $(LOCK_ENV)
+	@$(LOCK_ENV_BIN)/python -m pip install -q $(LOCK_TOOLS)
+	$(LOCK_ENV_BIN)/python -m piptools compile --quiet --strip-extras -o requirements.lock pyproject.toml
+	@rm -rf $(LOCK_ENV)
 	@echo "requirements.lock regenerated — a langgraph/checkpoint-aws bump requires make upgrade-canary"
 
 # ─── Quality — HERMETIC, no AWS account ───────────────────────────────────────

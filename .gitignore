@@ -244,3 +244,4 @@ infra/build/runtime/*
 # The upgrade canary hands a live thread id between two processes (ADR-016).
 # Committing one would make a later canary resume a thread from another stack.
 .canary-state.json
+.lockenv
