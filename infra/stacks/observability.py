@@ -52,6 +52,37 @@ from pii_erasure.observability.metrics import METRICS, NAMESPACE, MetricSpec
 #: it is extracted from the executor's log group by a metric filter below.
 STACK_PUBLISHED = frozenset({"saga.executor_timeout"})
 
+#: Metrics published with NO dimensions. The reason is the service's, not a preference.
+#:
+#: CloudWatch Logs only supports dimensions on a metric filter whose **filter pattern
+#: extracts named fields** — a space-delimited `[a, b, c]` or JSON `{...}` pattern. Ours
+#: matches the Lambda runtime's own timeout line, `Task timed out after N seconds`, which
+#: is unstructured text and contains neither `stage` nor `plane`. Those two are constants
+#: of the deployment, not fields of the event, so no pattern can produce them. Deploy
+#: returns `The specified filter pattern does not support dimensions` (V13-12).
+#:
+#: **The consequence is disclosed rather than hidden: this metric does not separate by
+#: stage.** Every stage's filter publishes into one `ASDP/Erasure saga.executor_timeout`,
+#: so a `pr-1234` stack's executor timeout reaches the dev alarm. Every other metric here
+#: carries `stage` and does separate. If that collision ever matters, the fix is the
+#: alternative `MECHANISM_NOTES` already names — alarm on `AWS/Lambda` `Duration`
+#: approaching the configured timeout, whose `FunctionName` dimension *is* stage-scoped —
+#: and it costs the single-namespace property this registry is built on. Not worth it for
+#: one metric today; written down so the trade is a decision rather than a discovery.
+UNDIMENSIONED = frozenset({"saga.executor_timeout"})
+
+
+def _dimensions_of(spec: MetricSpec, stage: str) -> dict[str, str]:
+    """The dimension set an alarm or widget must watch for this metric.
+
+    One place, so the alarm and the dashboard cannot disagree — and so the exception is
+    visible as an exception rather than as a special case buried in two builders.
+    """
+    if spec.name in UNDIMENSIONED:
+        return {}
+    return {"stage": stage, "plane": _plane_of(spec)}
+
+
 #: Every §10.1 metric that gets no alarm, and why. A test requires this to account for
 #: exactly the difference between the registry and the alarms, so "we forgot one" cannot
 #: masquerade as "we decided not to".
@@ -156,25 +187,24 @@ class ObservabilityStack(Stack):
             metric_namespace=NAMESPACE,
             metric_name="saga.executor_timeout",
             metric_value="1",
-            # NO `default_value`, and the omission is forced rather than chosen. AWS:
-            # "If you assign dimensions to a metric created by a metric filter, you can't
-            # assign a default value for that metric." Setting both is rejected at deploy
-            # time with a 400 — which is where this was found (V13-11), because `cdk synth`
-            # validates template shape and never the service's own rules.
+            # NO dimensions — see UNDIMENSIONED. Two deploys, two different 400s, and the
+            # pair of them is the whole lesson: `cdk synth` validates template shape
+            # against the resource schema and never the service's semantics, so both were
+            # green in the hermetic gate.
             #
-            # Of the two, `dimensions` is the one that has to stay. The alarm is built with
-            # `dimensions_map={stage, plane}` like every other alarm here, and a dimension
-            # set is part of a metric's identity: publish this metric bare and the alarm
-            # watches a combination nothing writes, sits at NOT_BREACHING, and renders
-            # green forever. That is V13-8, re-entered through a service constraint.
-            # `stage` also keeps a dev timeout off the prod alarm — the filters are
-            # per-log-group, but the metric they publish into is account-wide.
+            #   1. dimensions + default_value together → "mutually exclusive" (V13-11)
+            #   2. dimensions on a literal filter pattern → "the specified filter pattern
+            #      does not support dimensions" (V13-12)
             #
-            # What the zero baseline actually bought is smaller than it looks: the alarm
-            # already treats missing data as NOT_BREACHING, and at Sum over two datapoints
-            # a lone timeout does not fire with or without it. The dashboard shows gaps
-            # between events instead of a flat zero line. That is the whole cost.
-            dimensions={"stage": self.stage, "plane": "saga"},
+            # The second is the one that settles it. Dimensions require a pattern that
+            # extracts named FIELDS, and `stage`/`plane` are constants of the deployment
+            # rather than fields of the log line — no pattern can conjure them. So the
+            # dimensions go, and with them gone `default_value` becomes legal again.
+            #
+            # Which is a genuine consolation rather than a shrug: the zero baseline is
+            # what lets the alarm tell "no timeouts" from "nothing reported", and it is
+            # the reason `_alarm` can leave this one on its normal footing.
+            default_value=0,
         )
 
     # ── alarms ───────────────────────────────────────────────────────────────
@@ -195,13 +225,15 @@ class ObservabilityStack(Stack):
                 namespace=NAMESPACE,
                 metric_name=spec.name,
                 # The BASE dimension set, which `Dimensions.dimension_sets()` publishes
-                # unconditionally. A dimension set is part of a metric's identity and EMF
-                # rolls up across none of them, so alarming on `{stage, plane, systemId}`
-                # would be correct only for the call sites that pass a participant —
-                # `hard_delete` emits `manifest.digest_mismatch` without one. Before
+                # unconditionally — or none at all for the metric the log-filter publishes
+                # bare. A dimension set is part of a metric's identity and nothing rolls up
+                # across them, so alarming on `{stage, plane, systemId}` would be correct
+                # only for the call sites that pass a participant, and alarming on
+                # `{stage, plane}` is wrong for a metric published without either. Before
                 # V13-8 the emitter published only the wide set and this alarm watched a
-                # combination nothing wrote.
-                dimensions_map={"stage": self.stage, "plane": _plane_of(spec)},
+                # combination nothing wrote; V13-12 is the same mistake from the stack's
+                # side. One helper answers it for both builders.
+                dimensions_map=_dimensions_of(spec, self.stage),
                 statistic=spec.statistic,
                 period=_PERIOD,
             ),
@@ -242,7 +274,7 @@ class ObservabilityStack(Stack):
                             cloudwatch.Metric(
                                 namespace=NAMESPACE,
                                 metric_name=spec.name,
-                                dimensions_map={"stage": self.stage, "plane": _plane_of(spec)},
+                                dimensions_map=_dimensions_of(spec, self.stage),
                                 statistic=spec.statistic,
                                 period=_PERIOD,
                             )

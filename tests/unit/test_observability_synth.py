@@ -33,6 +33,7 @@ sys.path.insert(0, str(REPO / "infra"))
 from stacks.observability import (  # noqa: E402 — needs the path insert above
     NOT_ALARMED,
     STACK_PUBLISHED,
+    UNDIMENSIONED,
     ObservabilityStack,
     _plane_of,
     alarmed_metrics,
@@ -137,12 +138,18 @@ def test_every_alarm_watches_a_dimension_set_the_emitter_publishes(
     """
     from pii_erasure.observability.metrics import Dimensions
 
-    alarmed = {d["Name"] for d in _alarms(template)[spec.name]["Dimensions"]}
+    alarmed = sorted(d["Name"] for d in _alarms(template)[spec.name].get("Dimensions", []))
+    if spec.name in UNDIMENSIONED:
+        # Published bare by a log metric filter, because the pattern cannot carry
+        # dimensions (V13-12). The alarm must be bare too, or it watches nothing.
+        assert alarmed == [], f"{spec.name} is published without dimensions but alarmed with"
+        return
+
     # What the emitter would publish at its *widest* call site: system_id set. The base
     # set has to be in there, and the alarm has to be the base set.
     published = Dimensions(stage=STAGE, plane="saga", system_id="any").dimension_sets()
-    assert sorted(alarmed) in published, (
-        f"{spec.name}'s alarm watches {sorted(alarmed)}, which is not one of the "
+    assert alarmed in published, (
+        f"{spec.name}'s alarm watches {alarmed}, which is not one of the "
         f"dimension sets the emitter publishes ({published}) — it can never receive a "
         f"data point, and NOT_BREACHING makes that look healthy rather than unknown"
     )
@@ -153,10 +160,26 @@ def test_the_stack_alarms_on_the_base_dimension_set_and_nothing_wider(template: 
 
     A per-participant alarm would be correct only for the call sites that pass a
     `systemId`, and `hard_delete` emits `manifest.digest_mismatch` without one. One shape
-    for every alarm is what makes `_alarm` generic rather than per-metric."""
+    for every alarm is what makes `_alarm` generic rather than per-metric — with exactly
+    one exception, which has to be declared in `UNDIMENSIONED` to be allowed here."""
     for name, properties in _alarms(template).items():
-        assert sorted(d["Name"] for d in properties["Dimensions"]) == ["plane", "stage"], (
-            f"{name} is alarmed on a wider set than every call site guarantees"
+        expected = [] if name in UNDIMENSIONED else ["plane", "stage"]
+        assert sorted(d["Name"] for d in properties.get("Dimensions", [])) == expected, (
+            f"{name} is alarmed on a set that is not what the publisher writes"
+        )
+
+
+def test_the_undimensioned_exception_stays_an_exception(template: Any) -> None:
+    """An escape hatch nobody bounds becomes the norm.
+
+    `UNDIMENSIONED` exists for metrics a *log metric filter* publishes, where the service
+    forbids dimensions. Application code has no such constraint — `emit` always writes the
+    base set — so an app-emitted metric appearing here would be someone silencing this
+    file's checks rather than recording a limitation."""
+    for name in UNDIMENSIONED:
+        assert name in STACK_PUBLISHED, (
+            f"{name} is exempt from dimensions but is not stack-published. Only the log "
+            f"metric filter has that constraint; application code must emit the base set."
         )
 
 
@@ -231,12 +254,48 @@ def test_the_executor_timeout_metric_is_extracted_from_logs(template: Any) -> No
     # V13-8 established: a dimension set is part of a metric's identity, and this is the
     # one §10.1 metric whose publisher is the stack rather than application code — so
     # nothing in `metrics.py` constrains it and it has to be checked here.
-    published = {pair["Key"]: pair["Value"] for pair in transformation["Dimensions"]}
-    assert published == {"stage": STAGE, "plane": "saga"}
+    # NO dimensions, and a zero baseline instead. CloudWatch Logs supports dimensions only
+    # on a pattern that extracts named fields; this one matches unstructured runtime text,
+    # and `stage`/`plane` are constants of the deployment rather than fields of the event
+    # (V13-12). With the dimensions gone, `DefaultValue` is legal again — and it is what
+    # lets the alarm tell "no timeouts" from "nothing reported".
+    assert "Dimensions" not in transformation
+    assert transformation["DefaultValue"] == 0
 
-    # And the pair AWS refuses, asserted here too rather than only in the sweep below —
-    # this is the filter that actually failed a deploy.
-    assert "DefaultValue" not in transformation
+
+def test_no_metric_filter_puts_dimensions_on_a_pattern_that_cannot_carry_them() -> None:
+    """The second 400, made hermetic (V13-12).
+
+    AWS: *"The specified filter pattern does not support dimensions."* Dimensions are
+    extracted from the log event, so they require a pattern that names fields — a
+    space-delimited `[a, b, c]` or a JSON `{...}` selector. A literal or quoted-string
+    pattern matches text and names nothing, and pairing one with dimensions is rejected
+    at deploy time, after the change set is accepted.
+
+    `cdk synth` cannot see this: it checks the template against the resource schema and
+    knows nothing of CloudWatch Logs' semantics. So the gate learns the rule, which is the
+    same discipline this repo applies to its participant fakes — when the service refuses
+    something the fake accepted, teach the fake that one rule.
+    """
+    from tests.unit.synthesised import templates
+
+    offenders = []
+    for name, body in templates().items():
+        for logical, resource in body.get("Resources", {}).items():
+            if resource.get("Type") != "AWS::Logs::MetricFilter":
+                continue
+            pattern = str(resource["Properties"].get("FilterPattern", "")).strip()
+            extracts_fields = pattern.startswith(("[", "{"))
+            for transformation in resource["Properties"]["MetricTransformations"]:
+                if transformation.get("Dimensions") and not extracts_fields:
+                    offenders.append(f"{name}:{logical} pattern={pattern!r}")
+
+    assert not offenders, (
+        f"{offenders} attach dimensions to a filter pattern that extracts no named "
+        f"fields. CloudWatch Logs rejects that with a 400 at deploy time. Either use a "
+        f"space-delimited [a, b, c] or JSON pattern that actually names the field, or "
+        f"drop the dimensions and record the metric in UNDIMENSIONED with the reason."
+    )
 
 
 def test_no_metric_filter_sets_both_dimensions_and_a_default_value() -> None:
