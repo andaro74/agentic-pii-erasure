@@ -104,6 +104,11 @@ CDK_APP := "$(abspath $(VENV_BIN)/python)" app.py
 # schema emitted by the pinned aws-cdk-lib, and npx will happily serve one.
 CDK := npx -y aws-cdk@2.1133.0
 
+# The one stack with no stage in its name. Deployed by its own target and never by
+# `--all`, because a budget is account-wide — see stacks/guardrails.py. A test asserts
+# this string matches the stack module's, so the two cannot drift.
+GUARDRAILS_STACK := asdp-account-guardrails
+
 # ─── .env is authoritative for the AWS-touching targets ───────────────────────
 # make does not read .env, so every variable in it used to be inert: a user
 # could set AWS_REGION=eu-west-1 there and deploy to whatever their profile
@@ -131,7 +136,11 @@ synth: ## CDK synth. Free, no credentials. IAM assertions live in tests/unit. (M
 	cd infra && $(CDK) synth --quiet --app '$(CDK_APP)'
 
 .PHONY: check
-check: lint test policy-test synth ## What CI runs on every commit. HERMETIC — no AWS account.
+check: lint synth test policy-test ## What CI runs on every commit. HERMETIC — no AWS account.
+# `synth` runs BEFORE `test`, and the order is asserted in tests/unit/test_makefile_env.py.
+# Two unit tests read the synthesised templates — the cost-floor rule and the "no budget in
+# a stage stack" check — and `infra/cdk.out` is gitignored. With `test` first they passed on
+# a stale local directory and would have failed on CI's clean checkout (V13-7).
 
 # ─── Deployment — HUMAN-ONLY, costs money ─────────────────────────────────────
 # Denied to Claude Code in .claude/settings.json. Read infra/README.md first.
@@ -299,6 +308,21 @@ deploy: package ## ⚠️ Deploy the production-shaped stack. Human-only. (M10)
 	@$(LOAD_ENV); \
 	$(REQUIRE_REGION); \
 	cd infra && $(CDK) deploy --all --app '$(CDK_APP)' --context stage=prod
+
+.PHONY: deploy-guardrails
+deploy-guardrails: ## ⚠️ Once per ACCOUNT: cost budgets. Not a stage stack. Human-only. (M10)
+	@$(LOAD_ENV); \
+	$(REQUIRE_REGION); \
+	echo "deploying account-wide cost guardrails in $$AWS_REGION"; \
+	cd infra && $(CDK) deploy $(GUARDRAILS_STACK) --app '$(CDK_APP)' \
+		--context accountGuardrails=true \
+		$${MONTHLY_BUDGET_USD:+--context monthlyBudgetUsd=$$MONTHLY_BUDGET_USD} \
+		$${DAILY_BUDGET_USD:+--context dailyBudgetUsd=$$DAILY_BUDGET_USD}
+# Named explicitly rather than deployed with `--all`, and gated behind a context flag the
+# stage deploys never set. A budget is ACCOUNT-wide: if this stack were reachable from
+# `--all`, every ephemeral CI stage would create a duplicate and every teardown would
+# DELETE the account's only cost guardrail. Deploy once; `make destroy-dev` cannot touch it.
+#   MONTHLY_BUDGET_USD=250 DAILY_BUDGET_USD=10 make deploy-guardrails
 
 .PHONY: destroy-dev
 destroy-dev: ## ⚠️ Tear down the STAGE stack. Do this when you are done.

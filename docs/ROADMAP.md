@@ -320,7 +320,11 @@ There is no local mode ([ADR-017](adr/ADR-017-real-aws-participants.md)), so fro
 > it as work; only the *canary job inside it* needed fixing, and it needed it badly
 > (V13-1, V13-2). Corrected here rather than left to imply nothing existed.
 
-**Hermetic done when:** `make check` green with — every §10.1 metric either emitted by a named module, or recorded as un-emittable with the mechanism that must publish it instead · **no alarm on a metric nothing publishes**, asserted against the synthesised template in both directions, because such an alarm never leaves `INSUFFICIENT_DATA` and so reports health it cannot observe · every floor-bearing resource type cites an ADR, with the Aurora acceptance conditional on `MinCapacity: 0` read from the template · every `run:` step in `ci.yml` valid shell, the canary job passing target versions and rolling all three pin files back before installing.
+**Hermetic done when:** `make check` green **from a deleted `infra/cdk.out`** with — every §10.1 metric either emitted by a named module, or recorded as un-emittable with the mechanism that must publish it instead · **no alarm on a metric nothing publishes**, asserted against the synthesised template in both directions, because such an alarm never leaves `INSUFFICIENT_DATA` and so reports health it cannot observe · **no alarm whose threshold the healthy case exceeds** — the third way to build a useless alarm, and the one that fires, gets muted, and then looks like diligence (V13-6) · every floor-bearing resource type cites an ADR, with the Aurora acceptance conditional on `MinCapacity: 0` read from the template, and the stack list derived from the tree so a flag-gated stack cannot sit outside the rule · **no account-wide budget anywhere `cdk deploy --all` can reach it**, since `--all` is also what `make destroy-dev` and every CI teardown act on · every `run:` step in `ci.yml` valid shell, the canary job passing target versions and rolling all three pin files back before installing.
+
+> "From a deleted `cdk.out`" is in the gate because leaving it out is what let V13-7 ship:
+> two template-reading checks passed on a stale local artefact and would have failed on
+> CI's clean checkout. Deleting the artefact and running the gate takes eleven seconds.
 
 > This gate was **missing**, like M8's was before M7 closed — M10 listed only a deployed
 > gate, against the roadmap's own rule that every milestone from M2 has two. Written at
@@ -328,7 +332,7 @@ There is no local mode ([ADR-017](adr/ADR-017-real-aws-participants.md)), so fro
 
 **Deployed done when:** the per-PR workflow creates, seeds, evaluates, and destroys a stack in one run, with no leaked resources · one documented production-shaped run with real Bedrock, its cost recorded · an idle dev stack left up for 24h costs cents, evidenced from Cost Explorer · the dashboard shows real data points for every emitted metric, and no alarm sits in `INSUFFICIENT_DATA`.
 
-**Traps:** `make deploy` (prod) is human-only and denied in `.claude/settings.json` · teardown runs on `always()`, not on success — a failed run must not leak resources even though none of them now bill a floor · the break-glass merge path from [ADR-020](adr/ADR-020-deployed-eval-gate.md) is a logged exception, never a default.
+**Traps:** `make deploy` (prod) is human-only and denied in `.claude/settings.json` · teardown runs on `always()`, not on success — a failed run must not leak resources even though none of them now bill a floor · the break-glass merge path from [ADR-020](adr/ADR-020-deployed-eval-gate.md) is a logged exception, never a default · **anything account-wide must be unreachable from `--all`**: a budget in a stage stack is created per PR and deleted on teardown, so a green build disarms the cost guardrail · a per-stage budget filtered by tag is not the fix — cost-allocation tags must be activated by hand in the Billing console, so the filter matches nothing and the budget reports $0.00 forever.
 
 ---
 

@@ -16,6 +16,14 @@ from aws_cdk import App
 from stacks.api import ApiStack
 from stacks.foundation import FoundationStack
 from stacks.gateway import GatewayStack
+from stacks.guardrails import (
+    DEFAULT_DAILY_USD,
+    DEFAULT_MONTHLY_USD,
+    AccountGuardrailsStack,
+)
+from stacks.guardrails import (
+    STACK_NAME as GUARDRAILS_STACK_NAME,
+)
 from stacks.observability import ObservabilityStack
 from stacks.participants import ParticipantsStack
 from stacks.runtime import RuntimeStack
@@ -116,5 +124,20 @@ ApiStack(
     saga_executor=saga.executor_fn,
     prod=stage == "prod",
 )
+
+# Account-level cost guardrails (M10). Built ONLY behind an explicit context flag, and
+# that is the load-bearing part rather than fussiness: a budget is account-wide, `make
+# deploy-dev`/`make destroy-dev` both act on `--all`, and CI runs both against an ephemeral
+# per-PR stage. Instantiated unconditionally, this stack would have every pull request
+# create a duplicate account-wide budget and then DELETE the account's cost guardrail on
+# teardown. Behind the flag, neither `--all` verb can see it.
+if app.node.try_get_context("accountGuardrails"):
+    AccountGuardrailsStack(
+        app,
+        # No stage in the name, deliberately — see stacks/guardrails.py.
+        GUARDRAILS_STACK_NAME,
+        monthly_usd=int(app.node.try_get_context("monthlyBudgetUsd") or DEFAULT_MONTHLY_USD),
+        daily_usd=int(app.node.try_get_context("dailyBudgetUsd") or DEFAULT_DAILY_USD),
+    )
 
 app.synth()

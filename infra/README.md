@@ -28,6 +28,22 @@ S3 Object Lock in COMPLIANCE mode means an object cannot be deleted by anyone �
 
 Dev stacks therefore deploy with a **short Object Lock retention period** (a stack parameter, measured in days). If you raise it to something production-shaped, you have created a bucket you cannot delete until that period elapses, and no amount of IAM will help. Check the parameter before you deploy, not after.
 
+## Cost guardrails — deploy once per account, and not with `--all`
+
+```bash
+make deploy-guardrails      # ⚠️ human-only. Once per ACCOUNT, not per stage.
+```
+
+Two budgets and an SNS topic, in `asdp-account-guardrails` — the one stack with **no stage in its name**. A MONTHLY budget with a *forecasted* alert (the only kind that arrives while the spend can still be prevented) and a DAILY one with an actual alert, which is what catches the failure this architecture is actually exposed to: a stack somebody left up. Monitoring budgets are free — AWS charges only for *action-enabled* ones, and these take no actions, both because of the cost and because an action that stops resources to save money could interrupt an in-flight erasure or its audit trail.
+
+**It is built only behind a context flag, and that is load-bearing rather than fussy.** A budget is account-wide. `make deploy-dev` runs `cdk deploy --all` and `make destroy-dev` runs `cdk destroy --all`, and CI runs both against an ephemeral `pr-<run_id>` stage — so a budget reachable from `--all` would be created once per pull request and **deleted on teardown**. A green build would silently disarm the account's cost guardrail. `tests/unit/test_guardrails_synth.py` asserts against the synthesised templates that no stage stack contains a budget.
+
+**One manual step remains, and nothing is alerting until you take it:** subscribe someone to the topic. The stack creates no subscription on purpose — who gets paged is an operational decision, and a stack that mailed a hardcoded address would be one nobody else could deploy. The topic ARN is a stack output. Budgets also sends a confirmation email that the recipient must accept.
+
+**Do not enable encryption on that topic.** AWS Budgets cannot publish to an SSE topic without additional KMS grants; the Budgets troubleshooting guide's own remedy is to disable encryption. Adding a key would stop the alerts silently. No budget alert carries subject data, so invariant 5 is not what is being traded.
+
+A per-stage budget scoped by tag is not an option, and the reason is worth knowing: a cost-allocation tag has to be **activated by hand in the Billing console** before any budget can filter on it. Until then the filter matches nothing, and the budget reports $0.00 forever — a control that reads exactly like an account which is not spending money.
+
 ## Cost shape
 
 | Component | Idle cost | Notes |
@@ -59,12 +75,14 @@ Each step names the symptom you get by skipping it, because most of them do not 
 | 4 | Enable Bedrock model access in that region, then put the inference profile ID in `PII_ERASURE_MODEL_ID` (`aws bedrock list-inference-profiles`) | A clean deploy, then a discovery failure at M7 |
 | 5 | `make check` — hermetic, no AWS account touched | Nothing; this is the free confidence check |
 | 6 | **`make bootstrap`** — one-time per account **and** region | `Environment aws://…/… has not been bootstrapped` at step 7 |
-| 7 | `make deploy-dev` | — |
-| 8 | `make destroy-dev` when you are done | See *Teardown* above |
+| 7 | **`make deploy-guardrails`** — one-time per account. Free | No cost alerting. A stack left up, or a runaway, is discovered on next month's bill |
+| 8 | Subscribe to the `asdp-account-budget-alerts` topic and confirm the email | The budgets exist and alert nobody |
+| 9 | `make deploy-dev` | — |
+| 10 | `make destroy-dev` when you are done | See *Teardown* above |
 
 `make bootstrap` resolves your account from `aws sts get-caller-identity` and the region from `.env`, then creates the `CDKToolkit` stack (a staging bucket, an ECR repository, and the deploy roles). It is idempotent — re-running it is harmless — and it is **per region**: change `AWS_REGION` later and you bootstrap again.
 
-Steps 6–8 mutate real infrastructure and spend money, so they are denied to Claude Code in `.claude/settings.json` and run by a human.
+Steps 6–10 mutate real infrastructure, and most of them spend money, so they are denied to Claude Code in `.claude/settings.json` and run by a human. Step 7 is the exception on cost — monitoring budgets are free — but it is still a deploy, so it is still yours.
 
 > **`.env` is read by these targets, and your shell wins.** `make` does not read `.env` on its own; the AWS-touching targets source it explicitly, and any variable already exported in your shell overrides the file. That is how CI supplies `AWS_REGION` and a per-run `PII_ERASURE_STAGE` without a `.env` at all. `make synth` deliberately does *not* load it — synth needs no region and no credentials, and it stays that way because it is part of the hermetic gate.
 
@@ -81,7 +99,8 @@ infra/
     ├── runtime.py         AgentCore Runtime for discovery · ECR image · Memory store
     ├── saga.py            saga-executor + resume Lambdas · Scheduler role · SQS DLQ
     ├── api.py             HTTP API + Cognito authorizer for intake, approval, operator reads
-    └── observability.py   alarms and dashboards for ARCHITECTURE §10.1
+    ├── observability.py   alarms and dashboards for ARCHITECTURE §10.1
+    └── guardrails.py      account-wide cost budgets. NOT stage-scoped, NOT in `--all`
 ```
 
 ## Assertions that run at synth time
@@ -101,10 +120,11 @@ If one of these fails, the fix is the stack — never the assertion.
 ## Deploying
 
 ```bash
-make synth          # safe, free, no credentials needed, no .env needed
-make bootstrap      # ⚠️ human-only: once per account + region
-make deploy-dev     # ⚠️ human-only: creates infrastructure, spends money
-make destroy-dev    # do this
+make synth              # safe, free, no credentials needed, no .env needed
+make bootstrap          # ⚠️ human-only: once per account + region
+make deploy-guardrails  # ⚠️ human-only: once per account. Cost budgets; free
+make deploy-dev         # ⚠️ human-only: creates infrastructure, spends money
+make destroy-dev        # do this
 ```
 
 `deploy-dev` and `destroy-dev` act on `STAGE`, which resolves in this order: `make deploy-dev STAGE=foo` → `PII_ERASURE_STAGE` in your shell → `PII_ERASURE_STAGE` in `.env` → `dev`. Both echo the stage and region before they act; read that line.

@@ -73,6 +73,28 @@ def test_every_aws_target_loads_env_and_requires_a_region() -> None:
         assert "$(REQUIRE_REGION)" in body, f"{name} reaches AWS without demanding a region"
 
 
+def test_check_synthesises_before_it_tests() -> None:
+    """`make check` must run `synth` BEFORE `test`, and this is why (V13-7).
+
+    Two unit tests read the synthesised templates in `infra/cdk.out` — the cost-floor rule
+    and the "no account-wide budget in a stage stack" check — because both assert properties
+    of the whole app rather than of a stack constructed by hand. `infra/cdk.out` is
+    gitignored and CI checks out clean, so with `test` ahead of `synth` those checks ran
+    against a directory that did not exist, failed the job, and had passed locally only
+    because a previous run had left one behind. Prerequisite order in a non-parallel make is
+    execution order, which makes it the fix — and therefore worth asserting.
+    """
+    line = next(
+        raw for raw in MAKEFILE.read_text(encoding="utf-8").splitlines() if raw.startswith("check:")
+    )
+    prerequisites = line.split(":", 1)[1].split("##")[0].split()
+    assert {"lint", "synth", "test", "policy-test"} <= set(prerequisites), prerequisites
+    assert prerequisites.index("synth") < prerequisites.index("test"), (
+        f"check runs test before synth ({prerequisites}); the tests that read cdk.out would "
+        f"read a stale directory locally and an absent one in CI"
+    )
+
+
 def test_synth_stays_hermetic() -> None:
     synth = _recipes()["synth"]
     assert "$(LOAD_ENV)" not in synth, "synth must not need .env — it is part of make check"

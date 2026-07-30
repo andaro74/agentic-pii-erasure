@@ -24,15 +24,22 @@ Writing this check surfaced one violation of the hard constraint that nothing ha
 
 from __future__ import annotations
 
-import json
+import re
+import sys
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 import pytest
 
+from tests.unit.synthesised import templates
+
 REPO = Path(__file__).resolve().parents[2]
-SYNTH = REPO / "infra" / "cdk.out"
 ADR_DIR = REPO / "docs" / "adr"
+
+# `infra/` is a CDK app directory, not a package on the install path — same idiom as the
+# other synth tests.
+sys.path.insert(0, str(REPO / "infra"))
 
 #: Resource types that cost money for existing, whether or not anything uses them. Most of
 #: these the repo has never used — deliberately, because the value of this list is the
@@ -65,6 +72,10 @@ FLOOR_BEARING: dict[str, str] = {
     "AWS::RDS::DBInstance": "hourly unless db.serverless with a zero-floor cluster",
     "AWS::SecretsManager::Secret": "$0.40 per secret per month, used or not",
     "AWS::WAFv2::WebACL": "monthly per ACL plus per rule",
+    # Monitoring budgets are free; *action-enabled* ones are not, past the first two. The
+    # guardrails stack takes no actions for a second reason as well — an action that stops
+    # resources to save money could interrupt an in-flight erasure or its audit trail.
+    "AWS::Budgets::BudgetsAction": "$0.10/day per action-enabled budget beyond the first two",
     "AWS::CloudTrail::Trail": "the first trail is free; data events are not",
 }
 
@@ -93,10 +104,44 @@ ACCEPTED: dict[str, tuple[str, str]] = {
 }
 
 
+def _unsynthesised_templates() -> dict[str, dict[str, Any]]:
+    """Stacks `make synth` does not emit, synthesised here so the rule still reaches them.
+
+    `AccountGuardrailsStack` is built only behind a context flag, deliberately: a budget is
+    account-wide, and a stack inside `cdk deploy --all` is also inside `cdk destroy --all`,
+    which CI runs on every pull request. The side effect is that it never lands in
+    `cdk.out` — so a floor-bearing resource added there would be invisible to a check that
+    only reads the directory. `test_every_stack_in_the_tree_is_checked` is what makes that
+    a build failure for the *next* such stack rather than a thing to remember.
+    """
+    from aws_cdk import App, assertions
+    from stacks.guardrails import STACK_NAME, AccountGuardrailsStack
+
+    app = App(context={"accountGuardrails": "true"})
+    stack = AccountGuardrailsStack(app, STACK_NAME)
+    return {f"{STACK_NAME}.template.json": assertions.Template.from_stack(stack).to_json()}
+
+
+@lru_cache(maxsize=1)
 def _templates() -> dict[str, dict[str, Any]]:
+    """Every stack's template: the synthesised ones, plus the flag-gated one.
+
+    `synthesised.templates()` fails loudly on a missing or stale `cdk.out` rather than
+    returning nothing, which would make everything below vacuously true.
+    """
+    return {**templates(), **_unsynthesised_templates()}
+
+
+def _stack_modules() -> set[str]:
+    """Every module under `infra/stacks/` that declares a Stack.
+
+    Derived from the tree rather than listed, so adding a stack is what pulls it into this
+    check. A hand-written list is the same defect this file exists to fix, one layer up.
+    """
     return {
-        path.name: json.loads(path.read_text(encoding="utf-8"))
-        for path in sorted(SYNTH.glob("asdp-*.template.json"))
+        path.stem
+        for path in sorted((REPO / "infra" / "stacks").glob("*.py"))
+        if re.search(r"^class \w+\(Stack\)", path.read_text(encoding="utf-8"), re.MULTILINE)
     }
 
 
@@ -109,15 +154,22 @@ def _resources(kind: str) -> list[tuple[str, dict[str, Any]]]:
     return found
 
 
-@pytest.fixture(scope="module", autouse=True)
-def synthesised() -> None:
-    """`make check` runs `cdk synth` before the tests, so the templates are present. If
-    they are not, say so rather than passing over an empty directory."""
-    if not _templates():
-        pytest.fail(
-            f"no synthesised templates in {SYNTH}. Run `make synth` — this check reads the "
-            f"template, because that is what CloudFormation acts on."
-        )
+def test_every_stack_in_the_tree_is_checked() -> None:
+    """No stack may sit outside this rule.
+
+    The check reads `infra/cdk.out`, which holds only what the default app synthesises. A
+    stack built behind a context flag — or one somebody adds and forgets to instantiate —
+    would be exempt from ADR-021's rule while looking covered, because the test would still
+    pass on the other seven templates. So the stack list comes from the tree and every entry
+    has to appear in the checked set.
+    """
+    covered = " ".join(_templates())
+    missing = sorted(module for module in _stack_modules() if module not in covered)
+    assert not missing, (
+        f"{missing} declares a Stack that no template in this check covers. Either it is "
+        f"not instantiated in infra/app.py, or it is built behind a flag and needs adding "
+        f"to _unsynthesised_templates() — otherwise its resources bypass ADR-021's rule."
+    )
 
 
 def test_the_denylist_covers_services_this_repo_does_not_use() -> None:
