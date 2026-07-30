@@ -96,9 +96,22 @@ def assert_stack_matches_working_tree(stack: str) -> None:
         if deployed_keys.get(logical) != key
     }
     if stale:
+        # Grouped by the hash PAIR, not listed per function. Every participant shares one
+        # bundle (`make package` does `cp -r src/pii_erasure` into a single asset), so a
+        # one-line edit anywhere in the package prints the same two hashes eight times —
+        # 24 lines that look like eight problems and bury the one-line remedy. The
+        # repetition is the signal: identical pairs mean the shared bundle moved, which is
+        # the ordinary "you edited source after you deployed" case rather than a partial
+        # rollout. A genuine partial rollout shows more than one group, and that is worth
+        # seeing at a glance.
+        groups: dict[tuple[str | None, str], list[str]] = {}
+        for logical, pair in stale.items():
+            groups.setdefault(pair, []).append(logical)
         detail = "\n".join(
-            f"  {logical}\n    deployed: {was}\n    working tree: {now}"
-            for logical, (was, now) in sorted(stale.items())
+            f"  {len(names)} function(s): {', '.join(sorted(names))}\n"
+            f"    deployed:     {was}\n"
+            f"    working tree: {now}"
+            for (was, now), names in sorted(groups.items(), key=lambda kv: sorted(kv[1]))
         )
         pytest.fail(
             f"asdp-{STAGE}-{stack} is running code built from a different working "
