@@ -316,8 +316,20 @@ TERMINAL_STATUSES = frozenset(
     # `test_the_terminal_set_and_the_explanations_agree`, which is the whole reason
     # two hand-maintained lists get a test that compares them. A saga ending at
     # `no_data` would have been polled for the full fifteen minutes.
-    {"completed", "compensated", "blocked", "stuck", "aborted", "no_data"}
+    #
+    # `already_tombstoned` then did exactly that, for fifteen real minutes, on a
+    # deployed run (V13-13). It was missing from BOTH lists — so the test above
+    # compared them, found them consistent, and passed. Two hand-maintained lists
+    # agreeing is not the same as either being right, and the source of truth was
+    # always `saga/state.py`. `test_every_saga_status_is_classified` now derives the
+    # question from there.
+    {"completed", "compensated", "blocked", "stuck", "aborted", "no_data", "already_tombstoned"}
 )
+
+#: Statuses that are deliberately NOT terminal — a saga at one of these is still moving.
+#: Explicit rather than "everything else", so that adding a status to the saga forces a
+#: decision here instead of defaulting into a fifteen-minute poll.
+NON_TERMINAL_STATUSES = frozenset({"running"})
 
 
 #: What each terminal status MEANS, for an operator who did not write the saga. "halted
@@ -343,6 +355,13 @@ _TERMINAL_EXPLANATIONS = {
     ),
     "compensated": (
         "Phase 2 failed and the soft deletes were unwound. The subject's data is intact."
+    ),
+    "already_tombstoned": (
+        "This subject has already been erased — intake found a tombstone and halted "
+        "before planning, which is the idempotency guard working rather than a failure. "
+        "The seeded subjects are one-shot: a walkthrough, `make integration` or a "
+        "conformance run consumes the one it touches. Pick another subject, or re-run "
+        "`make seed` to restore the fabricated set."
     ),
 }
 

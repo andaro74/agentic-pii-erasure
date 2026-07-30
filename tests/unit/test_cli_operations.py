@@ -342,6 +342,70 @@ def test_the_terminal_set_and_the_explanations_agree() -> None:
     assert operations.TERMINAL_STATUSES - {"completed"} <= set(operations._TERMINAL_EXPLANATIONS)
 
 
+def test_every_saga_status_is_classified() -> None:
+    """The check the one above cannot make (V13-13).
+
+    Comparing the CLI's two hand-maintained lists to *each other* catches drift between
+    them and nothing else. `already_tombstoned` was absent from both, so they agreed —
+    and a deployed walkthrough polled a saga that had halted at four seconds for the full
+    fifteen minutes, then reported "did not reach 'approval' within 900s". True, useless,
+    and fifteen minutes late, which is verbatim what `wait_for`'s own docstring promises
+    not to do.
+
+    The source of truth was never either list; it is `saga/state.py`. So the statuses are
+    read from there, and every one must be *classified* — terminal or explicitly not.
+    Adding a status to the saga now fails this test until someone decides which it is,
+    rather than defaulting into a long poll that misdiagnoses itself as a timeout.
+    """
+    from pii_erasure.saga import state
+
+    declared = {
+        value
+        for name, value in vars(state).items()
+        if name.startswith("STATUS_") and isinstance(value, str)
+    }
+    classified = operations.TERMINAL_STATUSES | operations.NON_TERMINAL_STATUSES
+    unclassified = declared - classified
+    assert not unclassified, (
+        f"{sorted(unclassified)} exist in saga/state.py and are neither in "
+        f"TERMINAL_STATUSES nor NON_TERMINAL_STATUSES. A saga reaching one would be "
+        f"polled until POLL_TIMEOUT_SECONDS and then reported as a timeout, which sends "
+        f"the operator looking for slowness instead of for the halt that already happened."
+    )
+
+
+def test_the_two_classifications_do_not_overlap() -> None:
+    """ "Terminal" and "still moving" are contradictory claims; a status in both would let
+    `wait_for` take either branch depending on which check runs first."""
+    overlap = operations.TERMINAL_STATUSES & operations.NON_TERMINAL_STATUSES
+    assert not overlap, f"{sorted(overlap)} is classified as both terminal and non-terminal"
+
+
+def test_an_already_tombstoned_saga_stops_the_wait_immediately(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The behavioural half of V13-13, and the half that actually failed a run.
+
+    Asserted through `wait_for` rather than against the constant, because membership in a
+    frozenset is not the property that matters — ending the wait is.
+
+    **The timeout is shortened first, and that is load-bearing.** Written against the real
+    `POLL_TIMEOUT_SECONDS`, a regression here does not fail — it *polls for fifteen
+    minutes*, exactly as the deployed run did, and `make check` looks hung rather than red.
+    A test whose failure mode is an indefinite stall gets killed and skipped rather than
+    read. Verified by removing the fix: this now goes red in about a second.
+    """
+    monkeypatch.setattr(operations, "POLL_TIMEOUT_SECONDS", 1)
+    monkeypatch.setattr(operations, "POLL_INTERVAL_SECONDS", 0)
+    monkeypatch.setattr(
+        operations,
+        "describe_thread",
+        lambda thread_id: {"status": "already_tombstoned", "gate": None},
+    )
+    with pytest.raises(OperationError, match="already been erased"):
+        operations.wait_for("saga_test", gate="approval")
+
+
 def test_recorded_errors_are_still_shown(monkeypatch: pytest.MonkeyPatch) -> None:
     """The explanation supplements the detail; it must not replace it."""
     monkeypatch.setattr(

@@ -1,0 +1,24 @@
+\u2500\u2500 walkthrough saga_9094e28d85e4 · subject sub_mar_7f3a91c4 \u2500\u2500
+
+
+1. intake
+
+2. discovery + plan
+   [   4s] status=already_tombstoned gate=None
+   [  69s] status=already_tombstoned gate=None
+   [ 123s] status=already_tombstoned gate=None
+   [ 188s] status=already_tombstoned gate=None
+   [ 242s] status=already_tombstoned gate=None
+   [ 307s] status=already_tombstoned gate=None
+   [ 361s] status=already_tombstoned gate=None
+   [ 426s] status=already_tombstoned gate=None
+   [ 481s] status=already_tombstoned gate=None
+   [ 546s] status=already_tombstoned gate=None
+   [ 600s] status=already_tombstoned gate=None
+   [ 665s] status=already_tombstoned gate=None
+   [ 720s] status=already_tombstoned gate=None
+   [ 785s] status=already_tombstoned gate=None
+
+\u274c walkthrough FAILED: saga_9094e28d85e4 did not reach 'approval' within 900s 
+(last: gate=None status='already_tombstoned')
+make: *** [Makefile:392: walkthrough] Error 1
