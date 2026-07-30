@@ -95,6 +95,61 @@ def test_check_synthesises_before_it_tests() -> None:
     )
 
 
+def test_no_deploy_shares_the_hermetic_gates_output_directory() -> None:
+    """A deploy must not read a cloud assembly that a free target can delete under it.
+
+    `cdk deploy` synthesises, parses `manifest.json` into memory, and then re-opens
+    per-stack files (`<stack>.metadata.json`, the asset manifest) lazily — minutes later,
+    while CloudFormation works. `make check` and `make synth` rewrite `infra/cdk.out`
+    wholesale and are meant to be runnable at any time, by anyone, because they are free
+    and hermetic. Run one during a deploy and the deploy dies mid-flight on `ENOENT ...
+    <stack>.metadata.json`, after it has already begun mutating AWS.
+
+    The guardrails stack is the sharpest case and the one that surfaced this: a plain
+    synth carries no `accountGuardrails` context, so it recreates the seven dev stacks'
+    files and *not* that one — removing precisely the file the in-flight deploy still
+    needs, and nothing else.
+
+    `bootstrap` is excluded because it takes an explicit `aws://account/region` and
+    synthesises no app.
+    """
+    for name, body in _recipes().items():
+        for invocation in re.finditer(r"\$\(CDK\)\s+(deploy|destroy)\b[^\n]*", body):
+            assert "-o '$(CDK_DEPLOY_OUT)'" in invocation.group(0), (
+                f"{name} deploys out of the gate's own cdk.out. A concurrent `make check` "
+                f"would delete the assembly from under it, mid-deploy: pass "
+                f"-o '$(CDK_DEPLOY_OUT)'"
+            )
+
+
+def test_the_deploy_output_directory_is_not_the_gates() -> None:
+    """The variable has to actually point somewhere else, or the check above is a ritual."""
+    line = next(
+        raw
+        for raw in MAKEFILE.read_text(encoding="utf-8").splitlines()
+        if raw.startswith("CDK_DEPLOY_OUT")
+    )
+    value = line.split(":=", 1)[1].strip()
+    assert value, "CDK_DEPLOY_OUT is empty, which resolves to the CDK default: cdk.out"
+    assert value != "cdk.out", (
+        f"CDK_DEPLOY_OUT is {value!r} — the deploys are back in the gate's directory"
+    )
+
+
+def test_synth_keeps_the_default_output_directory() -> None:
+    """The other half. `tests/unit/synthesised.py` reads `infra/cdk.out` and fails loudly
+    on a stale or missing one (V13-7); pointing synth elsewhere would make every
+    template-reading test read a directory nothing writes."""
+    assert "-o" not in _recipes()["synth"], "synth must keep writing infra/cdk.out"
+
+
+def test_clean_removes_both_assemblies() -> None:
+    """Two directories now, and the one added last is the one a `clean` forgets."""
+    clean = _recipes()["clean"]
+    assert "infra/cdk.out" in clean
+    assert "infra/$(CDK_DEPLOY_OUT)" in clean
+
+
 def test_synth_stays_hermetic() -> None:
     synth = _recipes()["synth"]
     assert "$(LOAD_ENV)" not in synth, "synth must not need .env — it is part of make check"

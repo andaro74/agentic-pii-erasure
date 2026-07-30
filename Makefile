@@ -109,6 +109,26 @@ CDK := npx -y aws-cdk@2.1133.0
 # this string matches the stack module's, so the two cannot drift.
 GUARDRAILS_STACK := asdp-account-guardrails
 
+# ─── Deploys do NOT share the hermetic gate's cloud assembly ──────────────────
+# `cdk deploy` synthesises into an output directory, parses `manifest.json` into
+# memory, and then re-opens per-stack files (`<stack>.metadata.json`, the asset
+# manifest) LAZILY, minutes later, while CloudFormation works. `make check` and
+# `make synth` rewrite `infra/cdk.out` wholesale. Run one while the other is
+# deploying and the deploy dies on:
+#
+#   ENOENT: no such file or directory, open '...cdk.out/asdp-account-guardrails.metadata.json'
+#
+# The guardrails stack is the sharpest case: a plain `cdk synth` carries no
+# `accountGuardrails` context, so it recreates the seven dev stacks' files and
+# NOT that one — deleting precisely the file the in-flight deploy still needs.
+# A deploy that has already begun mutating AWS must not depend on a directory
+# a free, hermetic, run-it-any-time target owns. So they get their own.
+#
+# `infra/cdk.out` stays the gate's, exclusively: it is what `tests/unit/
+# synthesised.py` reads, and V13-7 is what happens when that directory's
+# contents are ambiguous.
+CDK_DEPLOY_OUT := cdk.out.deploy
+
 # ─── .env is authoritative for the AWS-touching targets ───────────────────────
 # make does not read .env, so every variable in it used to be inert: a user
 # could set AWS_REGION=eu-west-1 there and deploy to whatever their profile
@@ -297,7 +317,7 @@ deploy-dev: package preflight ## ⚠️ Deploy a dev-shaped stack (STAGE=dev by 
 	$(REQUIRE_REGION); \
 	$(RESOLVE_STAGE); \
 	echo "deploying stage=$$stage to $$AWS_REGION"; \
-	cd infra && $(CDK) deploy --all --app '$(CDK_APP)' --context stage="$$stage" \
+	cd infra && $(CDK) deploy --all --app '$(CDK_APP)' -o '$(CDK_DEPLOY_OUT)' --context stage="$$stage" \
 		$${POLICY_MODE:+--parameters "asdp-$$stage-gateway:PolicyEnforcementMode=$$POLICY_MODE"}
 # POLICY_MODE flips Cedar enforcement as a DEPLOY so it lands in CloudTrail (§9.4):
 #   POLICY_MODE=ENFORCE make deploy-dev
@@ -307,14 +327,14 @@ deploy-dev: package preflight ## ⚠️ Deploy a dev-shaped stack (STAGE=dev by 
 deploy: package ## ⚠️ Deploy the production-shaped stack. Human-only. (M10)
 	@$(LOAD_ENV); \
 	$(REQUIRE_REGION); \
-	cd infra && $(CDK) deploy --all --app '$(CDK_APP)' --context stage=prod
+	cd infra && $(CDK) deploy --all --app '$(CDK_APP)' -o '$(CDK_DEPLOY_OUT)' --context stage=prod
 
 .PHONY: deploy-guardrails
 deploy-guardrails: ## ⚠️ Once per ACCOUNT: cost budgets. Not a stage stack. Human-only. (M10)
 	@$(LOAD_ENV); \
 	$(REQUIRE_REGION); \
 	echo "deploying account-wide cost guardrails in $$AWS_REGION"; \
-	cd infra && $(CDK) deploy $(GUARDRAILS_STACK) --app '$(CDK_APP)' \
+	cd infra && $(CDK) deploy $(GUARDRAILS_STACK) --app '$(CDK_APP)' -o '$(CDK_DEPLOY_OUT)' \
 		--context accountGuardrails=true \
 		$${MONTHLY_BUDGET_USD:+--context monthlyBudgetUsd=$$MONTHLY_BUDGET_USD} \
 		$${DAILY_BUDGET_USD:+--context dailyBudgetUsd=$$DAILY_BUDGET_USD}
@@ -330,7 +350,7 @@ destroy-dev: ## ⚠️ Tear down the STAGE stack. Do this when you are done.
 	$(REQUIRE_REGION); \
 	$(RESOLVE_STAGE); \
 	echo "destroying stage=$$stage in $$AWS_REGION"; \
-	cd infra && $(CDK) destroy --all --app '$(CDK_APP)' --context stage="$$stage"
+	cd infra && $(CDK) destroy --all --app '$(CDK_APP)' -o '$(CDK_DEPLOY_OUT)' --context stage="$$stage"
 
 # ─── Data — DEPLOYED ──────────────────────────────────────────────────────────
 .PHONY: seed
@@ -437,5 +457,6 @@ diagrams: ## Render docs/diagrams/*.mermaid to SVG
 
 .PHONY: clean
 clean: ## Remove caches and build artefacts
-	rm -rf .pytest_cache .ruff_cache .mypy_cache dist build .coverage htmlcov cdk.out
+	rm -rf .pytest_cache .ruff_cache .mypy_cache dist build .coverage htmlcov cdk.out \
+		infra/cdk.out infra/$(CDK_DEPLOY_OUT)
 	find . -name __pycache__ -type d -prune -exec rm -rf {} +
