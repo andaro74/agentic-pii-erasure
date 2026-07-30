@@ -100,6 +100,8 @@ Ground truth is **generated, not labelled**: the fixture generator writes into t
 
 Serialization lives in the checkpoint package as much as in `langgraph`, so the two move in lockstep. Any bump requires `make upgrade-canary` to pass — pause a saga, upgrade, assert clean resume. See [ADR-016](docs/adr/ADR-016-serverless-durability.md).
 
+**Two packages, three places.** The pins are written in `pyproject.toml` (what the tests run against), `requirements.lock` (generated from it), and the Makefile's `SAGA_PINS` (what `make package` installs into the saga Lambda). Conflating "both pins" the packages with "both pins" the locations is what made the canary unable to pass at all (V12-6): `tests/unit/test_upgrade_canary_contract.py` now derives the file list from the tree, so a fourth location fails `make check` rather than a release.
+
 ### 10. Reducers are a correctness surface, not a detail
 
 `saga/state.py` reducers decide how concurrent node writes merge. Get one wrong and two participants' discovery results silently overwrite each other. That surfaces as a **recall failure**, not a crash — the exact failure mode ADR-008 exists to prevent.

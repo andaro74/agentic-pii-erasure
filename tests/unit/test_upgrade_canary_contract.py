@@ -84,6 +84,64 @@ def test_the_hermetic_gate_runs_on_the_new_versions_before_the_deploy() -> None:
     assert check < deploy, "the hermetic gate must run before the deploy it would invalidate"
 
 
+#: Where an exact `langgraph` pin lives. Discovered by reading, not asserted from memory —
+#: the point of the test below is that this list is derived from the tree.
+_PIN_BEARING = ("pyproject.toml", "Makefile")
+
+
+def test_the_canary_bumps_every_file_that_names_a_pin() -> None:
+    """The canary bumped two of the three places a pin lives, so it could never pass.
+
+    `SAGA_PINS` in the Makefile is what `make package` installs into the Lambda asset —
+    deliberately a separate string, so a reader can see what ships. The canary rewrote
+    `pyproject.toml` and `requirements.lock` and left it, which does not quietly ship the
+    old version: `make lock` writes the new one into the lockfile, `make package` passes
+    that as a constraint, and pip becomes unresolvable. Unpassable either way (V12-6).
+
+    Derived from the tree rather than hardcoded, so a **fourth** location — a Dockerfile,
+    a second asset target, a constraints file — fails here instead of at the next canary.
+    """
+    pin = re.compile(r'"langgraph(?:-checkpoint-aws)?==\d')
+    found = sorted(
+        path.name
+        for path in REPO.iterdir()
+        if path.is_file()
+        and path.suffix in ("", ".toml", ".lock", ".cfg", ".txt")
+        and path.name != "requirements.lock"
+        and pin.search(path.read_text(encoding="utf-8", errors="ignore"))
+    )
+    assert found == sorted(_PIN_BEARING), (
+        f"the set of files naming an exact langgraph pin changed: {found}. Teach "
+        f"scripts/upgrade_canary.sh to bump the new one, add it to _PIN_BEARING, and "
+        f"check `restore()` puts it back on failure."
+    )
+
+    script = SCRIPT.read_text(encoding="utf-8")
+    for name in found:
+        assert name in script, (
+            f"{name} pins langgraph but scripts/upgrade_canary.sh never rewrites it — the "
+            f"canary would test a version the deployed Lambda does not run"
+        )
+
+
+def test_a_failed_canary_restores_every_file_it_edits() -> None:
+    """`restore()` runs on any non-zero exit. A file it edits but does not restore leaves
+    the tree claiming a version that was never canaried — and the failure path is exactly
+    when nobody is inclined to check."""
+    script = SCRIPT.read_text(encoding="utf-8")
+    restore = script[script.index("restore() {") : script.index("trap ")]
+    for name in _PIN_BEARING:
+        assert name in restore, f"restore() does not put {name} back after a failure"
+    # The venv is deliberately left on the new versions, which makes the environment
+    # disagree with the files it just restored. `make check` then fails on
+    # test_the_installed_versions_match_the_pins — correctly, and confusingly unless the
+    # script says so. Deliberate and stated, or it is just a mess someone else inherits.
+    assert "make install" in restore, (
+        "restore() leaves the venv on the target versions but does not tell the operator "
+        "how to get back — the next `make check` fails for a reason unrelated to their work"
+    )
+
+
 def test_the_pins_are_still_exact() -> None:
     """The thing the canary protects. `>=` here would mean a `pip install` could move
     the serializer under a paused saga with no canary run at all."""

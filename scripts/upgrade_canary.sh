@@ -72,6 +72,12 @@ cd "$REPO"
 export CANARY_STATE="${CANARY_STATE:-$REPO/.canary-state.json}"
 PYPROJECT="$REPO/pyproject.toml"
 LOCKFILE="$REPO/requirements.lock"
+#: The THIRD place a pin lives. `SAGA_PINS` is what `make package` installs into the
+#: Lambda asset, and it is a separate string on purpose so a reader can see what ships
+#: (`tests/unit/test_saga_pins.py` compares it against pyproject verbatim). A canary that
+#: bumped two of the three could never pass — V12-6, caught by the `make check` this
+#: script now runs before spending a deploy.
+MAKEFILE="$REPO/Makefile"
 BACKUP_DIR="$(mktemp -d)"
 
 TARGET_LANGGRAPH="${1:-}"
@@ -85,15 +91,26 @@ fi
 
 restore() {
   cp "$BACKUP_DIR/pyproject.toml" "$PYPROJECT"
+  cp "$BACKUP_DIR/Makefile" "$MAKEFILE"
   [ -f "$BACKUP_DIR/requirements.lock" ] && cp "$BACKUP_DIR/requirements.lock" "$LOCKFILE"
-  echo "↩  pyproject.toml and requirements.lock restored to the pinned versions."
+  echo "↩  pyproject.toml, Makefile and requirements.lock restored to the pinned versions."
+  # The venv is NOT rolled back, on purpose: a failure is worth inspecting on the versions
+  # that produced it. But that leaves the environment disagreeing with the files, and
+  # `make check` fails on `test_the_installed_versions_match_the_pins` until it is fixed —
+  # correctly, since a checkpoint-shaped test result from the wrong version is worthless.
+  # Saying so here is the difference between a deliberate state and a confusing one.
+  echo "⚠  the venv still has the TARGET versions installed. That is deliberate — inspect"
+  echo "   the failure on the versions that caused it. \`make check\` will fail on"
+  echo "   test_the_installed_versions_match_the_pins until you run:  make install"
 }
 trap 'code=$?; if [ $code -ne 0 ]; then restore; echo "❌ upgrade canary FAILED (exit $code)" >&2; fi; rm -rf "$BACKUP_DIR"; exit $code' EXIT
 
 cp "$PYPROJECT" "$BACKUP_DIR/pyproject.toml"
+cp "$MAKEFILE" "$BACKUP_DIR/Makefile"
 [ -f "$LOCKFILE" ] && cp "$LOCKFILE" "$BACKUP_DIR/requirements.lock"
 
 current_pin() { grep -oE "^  \"$1==[0-9][^\"]*\"" "$PYPROJECT" | grep -oE '[0-9][^"]*'; }
+shipped_pin() { grep -oE "\"$1==[0-9][^\"]*\"" "$MAKEFILE" | head -1 | grep -oE '[0-9][^"]*'; }
 FROM_LANGGRAPH="$(current_pin langgraph)"
 FROM_CHECKPOINT="$(current_pin langgraph-checkpoint-aws)"
 
@@ -128,16 +145,27 @@ test -s "$CANARY_STATE" || { echo "❌ the pause stage wrote no state file" >&2;
 echo "   paused: $(cat "$CANARY_STATE")"
 echo
 
-# ── 2. bump both pins, together ──────────────────────────────────────
+# ── 2. bump both pins, in all three places ───────────────────────────
 if [ -n "$TARGET_LANGGRAPH" ]; then
-  echo "2. bumping both pins"
+  echo "2. bumping both pins, in pyproject.toml AND the Makefile's SAGA_PINS"
   # sed on the exact pinned lines; the pins are `"pkg==x.y.z"` at two-space indent, and
   # anchoring on that shape avoids rewriting the keywords list or a comment.
   sed -i.bak -E "s/^(  \"langgraph==)[0-9][^\"]*(\")/\1$TARGET_LANGGRAPH\2/" "$PYPROJECT"
   sed -i.bak -E "s/^(  \"langgraph-checkpoint-aws==)[0-9][^\"]*(\")/\1$TARGET_CHECKPOINT\2/" "$PYPROJECT"
   rm -f "$PYPROJECT.bak"
+  # SAGA_PINS is what `make package` installs into the Lambda asset. Leaving it behind
+  # does not ship the old version quietly — `make lock` has just written the new one into
+  # requirements.lock, which `make package` passes as a constraint, so pip becomes
+  # unresolvable at step 3. Either way the canary cannot pass, which is why it never had
+  # (V12-6). The leading quote is what keeps the `langgraph` pattern off
+  # `langgraph-checkpoint-aws`.
+  sed -i.bak -E "s/(\"langgraph==)[0-9][^\"]*(\")/\1$TARGET_LANGGRAPH\2/" "$MAKEFILE"
+  sed -i.bak -E "s/(\"langgraph-checkpoint-aws==)[0-9][^\"]*(\")/\1$TARGET_CHECKPOINT\2/" "$MAKEFILE"
+  rm -f "$MAKEFILE.bak"
   [ "$(current_pin langgraph)" = "$TARGET_LANGGRAPH" ] || { echo "❌ the langgraph pin did not move" >&2; exit 1; }
   [ "$(current_pin langgraph-checkpoint-aws)" = "$TARGET_CHECKPOINT" ] || { echo "❌ the checkpoint pin did not move" >&2; exit 1; }
+  [ "$(shipped_pin langgraph)" = "$TARGET_LANGGRAPH" ] || { echo "❌ SAGA_PINS still ships the old langgraph — the Lambda would not run what was canaried" >&2; exit 1; }
+  [ "$(shipped_pin langgraph-checkpoint-aws)" = "$TARGET_CHECKPOINT" ] || { echo "❌ SAGA_PINS still ships the old checkpoint-aws" >&2; exit 1; }
   make lock
   make install
   # Hermetic first, and before the deploy. A new version that breaks an API we call
@@ -177,6 +205,7 @@ else
   echo
   echo "   A pin marked 'already current' was NOT canaried — there was no newer release"
   echo "   to canary. When one appears, it needs its own run (invariant 9)."
-  echo "   The pins in pyproject.toml are now the targets. Commit them with this output,"
-  echo "   or run \`git checkout pyproject.toml requirements.lock\` to abandon."
+  echo "   The pins in pyproject.toml, the Makefile and requirements.lock are now the"
+  echo "   targets. Commit all three with this output, or abandon with:"
+  echo "     git checkout pyproject.toml Makefile requirements.lock"
 fi
