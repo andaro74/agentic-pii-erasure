@@ -147,3 +147,62 @@ def test_pii_inside_a_mapping_beside_a_digest_is_still_redacted() -> None:
 def test_a_long_digit_run_that_is_not_an_identifier_is_still_scrubbed() -> None:
     """The exemption is shape-specific, not a general amnesty for digits."""
     assert scrub("account 4111111111111111 please") != "account 4111111111111111 please"
+
+
+# ─── the EMF metadata node (V13-3) ────────────────────────────────────────────────────
+
+
+def _emf(metric: str = "resurrection.detected") -> dict[str, object]:
+    return {
+        "_aws": {
+            "Timestamp": 1574109732004,
+            "CloudWatchMetrics": [
+                {
+                    "Namespace": "ASDP/Erasure",
+                    "Dimensions": [["stage"]],
+                    "Metrics": [{"Name": metric, "Unit": "Count"}],
+                }
+            ],
+        },
+        "stage": "dev",
+        metric: 1,
+    }
+
+
+def test_an_emf_metric_name_survives_scrubbing() -> None:
+    """EMF calls the metric name `Name`, and `name` is a denied key — correctly, for a
+    person's name. So the metric name was redacted wholesale, CloudWatch would have
+    extracted a metric called `[REDACTED]`, and every alarm on a real name would have sat
+    in INSUFFICIENT_DATA forever: an alarm that cannot fire, shown on a dashboard as
+    healthy (V13-3). Same class as V11-6 — a structural value corrupted by a rule written
+    for free text.
+    """
+    out = scrub_mapping(_emf())
+    directive = out["_aws"]["CloudWatchMetrics"][0]  # type: ignore[index]
+    assert directive["Metrics"][0]["Name"] == "resurrection.detected"
+    assert directive["Namespace"] == "ASDP/Erasure"
+    assert out["resurrection.detected"] == 1
+
+
+def test_the_exemption_does_not_extend_past_the_metadata_node() -> None:
+    """`_aws` holds only references — dimension *keys*, metric names, units. Every value
+    lives on the root node and is still scrubbed. If that were not true the exemption
+    would be a hiding place rather than a fix."""
+    payload = _emf()
+    payload["name"] = "Dmitri Vasquez-Lund"
+    payload["email"] = "dmitri@example.invalid"
+    payload["note"] = "call +1 415 555 0123"
+
+    out = scrub_mapping(payload)
+
+    assert out["name"] == REDACTED
+    assert out["email"] == REDACTED
+    assert "555" not in str(out["note"])
+    assert out["_aws"]["CloudWatchMetrics"][0]["Metrics"][0]["Name"] == "resurrection.detected"  # type: ignore[index]
+
+
+def test_a_name_key_outside_the_metadata_node_is_still_denied() -> None:
+    """The exemption is keyed on the `_aws` node, not on the string "Name" — otherwise it
+    would disarm the denylist everywhere the word appears."""
+    out = scrub_mapping({"Metrics": [{"Name": "Ada Lovelace"}]})
+    assert out["Metrics"][0]["Name"] == REDACTED  # type: ignore[index]

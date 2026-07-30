@@ -107,12 +107,39 @@ def _key_is_denied(key: str) -> bool:
     return key.lower().replace("-", "").replace("_", "").replace(" ", "") in _DENY_KEYS
 
 
+#: CloudWatch's Embedded Metric Format metadata node. Passed through untouched.
+#:
+#: EMF puts the metric *name* in a member called `Name`, and `name` is a denied key —
+#: correctly, for a person's name. So `{"Name": "resurrection.detected"}` was redacted
+#: wholesale, CloudWatch extracted a metric literally called `[REDACTED]`, and every alarm
+#: on a real metric name would have sat in INSUFFICIENT_DATA forever: an alarm that cannot
+#: fire, which is worse than no alarm because a dashboard shows it as healthy (V13-3).
+#:
+#: Exempting the node rather than the key is what makes this safe. `_aws` contains only
+#: metadata and *references*: `Namespace`, `Timestamp`, dimension **key names**, metric
+#: names and units. Every dimension and metric **value** lives on the root node, outside
+#: this subtree, and is still scrubbed. There is nowhere in here for a name or an address
+#: to hide.
+#:
+#: The same shape as V11-6, which is why the fix is a class and not a special case: a
+#: structural value that must survive scrubbing intact, corrupted by a rule written for
+#: free text. Dimension values additionally must stay low-cardinality — EMF bills a custom
+#: metric per unique combination — so `subjectRef` is barred from them by cost and by
+#: invariant 5 at once.
+_EMF_METADATA_KEY = "_aws"
+
+
 def scrub_mapping(payload: Mapping[str, Any]) -> dict[str, Any]:
     """Scrub a mapping recursively: denylisted keys are redacted wholesale,
-    string values are pattern-scrubbed, nested mappings/lists recurse."""
+    string values are pattern-scrubbed, nested mappings/lists recurse.
+
+    The `_aws` EMF metadata node is copied through verbatim — see above.
+    """
     out: dict[str, Any] = {}
     for key, value in payload.items():
-        if _key_is_denied(key):
+        if key == _EMF_METADATA_KEY:
+            out[key] = value
+        elif _key_is_denied(key):
             out[key] = REDACTED
         else:
             out[key] = _scrub_value(value)
