@@ -1,0 +1,71 @@
+Captured: 2026-07-30
+Stack:    asdp-dev, us-west-2, account 581208540944
+Command:  make walkthrough
+Result:   PASSED in 587s
+
+Verbatim. The account id inside the S3 Vectors locator appears as [REDACTED]
+because observability/redact.py scrubbed it on the way out — that is the
+platform's own output, not an edit made here.
+
+────────────────────────────────────────────────────────────────────────────
+
+$ make walkthrough
+── walkthrough saga_296ded761a7b · subject sub_pri_9c1d7e22 ──
+
+
+1. intake
+
+2. discovery + plan
+   [   5s] status=running gate=None
+   [  49s] status=paused gate=approval
+   planned 1 participant(s)
+   digest sha256:be8afd91838e088c275cb7db611343da3e94df0af6794c64b766ff9644ceb691
+
+3. phase 2 soft delete
+   soft deletes applied — the gate is downstream of phase 2
+
+4. the pause
+   gate='approval' — and still 'approval' 3s later
+   no Lambda is held, no container is warm. The pause is a checkpoint row.
+
+5. approval
+saga saga_296ded761a7b  ·  subject sub_pri_9c1d7e22  ·  tier T2
+digest sha256:be8afd91838e088c275cb7db611343da3e94df0af6794c64b766ff9644ceb691
+
+── residualRisk ──
+  nothing survives this erasure
+
+── anomalies ──
+  [medium] baseline-unavailable: only 0 prior deletion(s) recorded for this tenant — too few to say what is normal. This plan has not been compared against anything; read the blast radius in full.
+
+── irreversibility ──
+  grace window: 30 days
+  crypto-shred: none
+  Phase 3 never compensates. After the grace window elapses there is no restore path — a failed hard delete is retried or halted, never rolled back.
+
+── blastRadius ──
+  vector-index (DERIVED_INDEX) — 9 artifact(s), soft_delete/hard_delete
+
+── inventory ──
+  vector-index: vector s3vectors://asdp-dev-vectors-[REDACTED]/subject-embeddings/sub_pri_9c1d7e22# x9
+
+6. grace window
+   waiting for the scheduler — compressed by stack parameter, not skipped
+
+7. phase 3 hard delete
+   [   0s] status=paused gate=grace_window
+   [  65s] status=paused gate=grace_window
+   [ 120s] status=paused gate=grace_window
+   [ 152s] status=paused gate=sweep
+   [ 186s] status=paused gate=sweep
+   [ 240s] status=paused gate=sweep
+   [ 304s] status=paused gate=sweep
+   [ 423s] status=paused gate=sweep
+   [ 488s] status=paused gate=sweep
+   [ 520s] status=completed gate=None
+
+8. certificate
+   ledger: 13 entries, chain verified
+   residuals disclosed: 0
+
+✅ walkthrough PASSED in 587s — saga_296ded761a7b

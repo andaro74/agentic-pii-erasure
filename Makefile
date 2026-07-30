@@ -381,7 +381,16 @@ walkthrough: ## Full arc against the dev stack: discover → soft → pause → 
 	@# without LOAD_ENV an operator who set them correctly is told they set nothing. This
 	@# is the same inertness the LOAD_ENV comment above describes; the M8 targets were
 	@# written without it and would have re-earned that finding on the deployed gate.
-	@$(LOAD_ENV); 	$(REQUIRE_REGION); 	$(PY) -m pii_erasure.cli.main walkthrough
+	@# SUBJECT picks which seeded subject to erase; omitted, the CLI takes the first it
+	@# finds. The seeds are deliberately uneven — one subject sits in a single system,
+	@# another in six — so the default run can be a *correct* walkthrough that
+	@# demonstrates almost nothing. Naming the subject is how you get the arc you meant:
+	@#
+	@#   make walkthrough SUBJECT=sub_mar_7f3a91c4   # six systems, full blast radius
+	@#   make walkthrough SUBJECT=sub_nne_8d5b3f60   # notify-suppression → a disclosed residual
+	@#   make walkthrough SUBJECT=sub_tob_5a0f8b31   # compliance-archive → the crypto-shred path
+	@$(LOAD_ENV); 	$(REQUIRE_REGION); 	$(PY) -m pii_erasure.cli.main walkthrough \
+		$(if $(SUBJECT),--subject $(SUBJECT)) $(if $(TENANT),--tenant $(TENANT))
 
 .PHONY: discover
 discover: ## Discover one subject. Usage: make discover SUBJECT=sub_7f3a (M7)
