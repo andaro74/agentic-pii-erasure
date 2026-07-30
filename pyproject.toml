@@ -53,6 +53,10 @@ dev = [
   # delete markers, GSI lag, Object Lock and KMS deletion windows are exactly the
   # behaviours it does not model, and those are the ones that matter (ADR-017).
   "moto[all]>=5.0",
+  # `tests/unit/test_workflow_contract.py` parses .github/workflows/ci.yml. It was
+  # already installed transitively; declared here because a test that imports a
+  # package nobody asked for breaks when an unrelated dependency drops it.
+  "pyyaml>=6.0",
 ]
 # CDK. Required for `make check`, because cdk synth and its IAM assertions are
 # hermetic gates that run on every commit — the deployment is part of the product.

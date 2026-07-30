@@ -392,7 +392,16 @@ eval-adversarial: ## Injection corpus. Pass = tool absent or policy denied. (M7)
 # ─── Release gates (ADR-016) ──────────────────────────────────────────────────
 .PHONY: upgrade-canary
 upgrade-canary: ## REQUIRED before bumping langgraph OR langgraph-checkpoint-aws (M9)
-	bash scripts/upgrade_canary.sh
+	@# With no versions this is the REHEARSAL form: it exercises pause → redeploy → resume
+	@# with the pins unchanged and says so. Pass both to canary a real bump:
+	@#
+	@#   make upgrade-canary LANGGRAPH=1.2.10 CHECKPOINT_AWS=1.2.0
+	@#
+	@# CI must pass them. The `upgrade-canary` job fires BECAUSE the pins changed, so its
+	@# checkout already holds the new versions — the no-argument form there would pause and
+	@# resume on the same version and report success for a transition it never tested
+	@# (V13-2). A gate that cannot gate.
+	bash scripts/upgrade_canary.sh $(LANGGRAPH) $(CHECKPOINT_AWS)
 
 # ─── Misc ─────────────────────────────────────────────────────────────────────
 .PHONY: diagrams

@@ -79,6 +79,20 @@ set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO"
 
+# The venv layout differs by platform: Windows puts interpreters in .venv/Scripts, POSIX
+# in .venv/bin. The Makefile has auto-detected this since M0; this script hardcoded
+# `.venv/Scripts/python.exe`, so the `upgrade-canary` job in .github/workflows/ci.yml —
+# which runs on ubuntu-latest — would have failed on its first line every time (V13-1).
+# It has never run, which is the only reason nobody found out.
+if [ -x "$REPO/.venv/Scripts/python.exe" ]; then
+  VENV_PY="$REPO/.venv/Scripts/python.exe"
+elif [ -x "$REPO/.venv/bin/python" ]; then
+  VENV_PY="$REPO/.venv/bin/python"
+else
+  echo "❌ no venv interpreter under .venv — run \`make install\` first." >&2
+  exit 2
+fi
+
 export CANARY_STATE="${CANARY_STATE:-$REPO/.canary-state.json}"
 PYPROJECT="$REPO/pyproject.toml"
 LOCKFILE="$REPO/requirements.lock"
@@ -162,7 +176,7 @@ echo
 # ── 1. pause, on the CURRENT versions ────────────────────────────────
 echo "1. pausing a saga on the deployed versions"
 rm -f "$CANARY_STATE"
-CANARY_STAGE=pause .venv/Scripts/python.exe -m pytest tests/integration/test_upgrade_canary.py -q -m canary
+CANARY_STAGE=pause "$VENV_PY" -m pytest tests/integration/test_upgrade_canary.py -q -m canary
 test -s "$CANARY_STATE" || { echo "❌ the pause stage wrote no state file" >&2; exit 1; }
 echo "   paused: $(cat "$CANARY_STATE")"
 echo
@@ -211,7 +225,7 @@ echo
 
 # ── 4. resume THAT thread from THAT table ────────────────────────────
 echo "4. resuming the paused thread"
-CANARY_STAGE=resume .venv/Scripts/python.exe -m pytest tests/integration/test_upgrade_canary.py -q -m canary
+CANARY_STAGE=resume "$VENV_PY" -m pytest tests/integration/test_upgrade_canary.py -q -m canary
 echo
 
 if [ "$MOVED_ANY" = no ]; then

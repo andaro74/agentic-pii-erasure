@@ -113,7 +113,14 @@ jobs:
 
   # ─────────────────────────────────────────────────────────────────────────────
   # RELEASE GATE — only when the pinned durability packages change (ADR-016).
-  # Pause a saga, bump langgraph AND langgraph-checkpoint-aws, assert clean resume.
+  # Pause a saga on the BASE versions, bump to the PR's versions, assert clean resume.
+  #
+  # The direction is the whole gate, and this job used to have it backwards (V13-2). It
+  # fires *because* pyproject's pins changed, so the checkout already holds the NEW
+  # versions — running the canary here without arguments paused and resumed on the same
+  # version and reported success for a transition it never tested. So the tree is rolled
+  # back to the base commit's pins first, the venv is installed from THOSE, and the PR's
+  # versions are handed to the canary as its targets. Anything else is a different test.
   # ─────────────────────────────────────────────────────────────────────────────
   upgrade-canary:
     needs: hermetic
@@ -144,22 +151,53 @@ jobs:
             BASE="origin/${{ github.base_ref }}"
             RANGE="$BASE...HEAD"
           elif [ -n "${{ github.event.before }}" ] && ! echo "${{ github.event.before }}" | grep -q '^0*$'; then
-            RANGE="${{ github.event.before }}..HEAD"
+            BASE="${{ github.event.before }}"
+            RANGE="$BASE..HEAD"
           else
-            RANGE="HEAD~1..HEAD"    # fallback: first push / workflow_dispatch
+            BASE="HEAD~1"           # fallback: first push / workflow_dispatch
+            RANGE="$BASE..HEAD"
           fi
-          if git diff --unified=0 "$RANGE" -- pyproject.toml \
-             | grep -qE '^\+.*"langgraph(-checkpoint-aws)?=='; then
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          else
+          if ! git diff --unified=0 "$RANGE" -- pyproject.toml \
+               | grep -qE '^\+.*"langgraph(-checkpoint-aws)?=='; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "Pins unchanged in $RANGE — canary not required for this change."
+            exit 0
           fi
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+          # The base ref, so the tree can be rolled back to the versions a paused saga
+          # would really have been checkpointed by. Set per event above rather than parsed
+          # back out of $RANGE — a branch name containing a dot would defeat that.
+          echo "base=$BASE" >> "$GITHUB_OUTPUT"
+
+          # The PR's versions become the canary's TARGETS. Read from the file rather than
+          # from the diff: a bump that rewraps the line, or moves it, still yields the
+          # right version, and there is exactly one exact pin per package.
+          pin() { grep -oE "^  \"$1==[0-9][^\"]*\"" pyproject.toml | grep -oE '[0-9][^"]*'; }
+          HEAD_LG="$(pin langgraph)"
+          HEAD_CP="$(pin langgraph-checkpoint-aws)"
+          if [ -z "$HEAD_LG" ] || [ -z "$HEAD_CP" ]; then
+            echo "::error::could not read both pins from pyproject.toml — refusing to run a canary that cannot name its own targets"
+            exit 1
+          fi
+          echo "head_langgraph=$HEAD_LG" >> "$GITHUB_OUTPUT"
+          echo "head_checkpoint=$HEAD_CP" >> "$GITHUB_OUTPUT"
+          echo "Canary targets: langgraph $HEAD_LG · langgraph-checkpoint-aws $HEAD_CP"
 
       - uses: actions/setup-python@v7
         if: steps.pins.outputs.changed == 'true'
         with:
           python-version: "3.12"
+
+      # BEFORE install, so the venv holds the versions the pause is checkpointed by. The
+      # canary bumps all three pin locations itself (V12-6), so all three must start at
+      # base — rolling back only pyproject would leave SAGA_PINS ahead and `make check`
+      # would fail inside the canary for a reason that is this workflow's fault.
+      - name: Roll the pins back to the base commit — the pause must happen on the OLD version
+        if: steps.pins.outputs.changed == 'true'
+        run: |
+          git checkout "${{ steps.pins.outputs.base }}" -- pyproject.toml Makefile requirements.lock
+          echo "Paused-on versions:"; grep -E '"langgraph(-checkpoint-aws)?==' pyproject.toml
 
       - name: Install (venv + dev extras)
         if: steps.pins.outputs.changed == 'true'
@@ -176,9 +214,12 @@ jobs:
         if: steps.pins.outputs.changed == 'true'
         run: make deploy-dev
 
-      - name: Upgrade canary — pause, bump, resume
+      - name: Upgrade canary — pause on base, bump to the PR's pins, resume
         if: steps.pins.outputs.changed == 'true'
-        run: make upgrade-canary
+        run: |
+          make upgrade-canary \
+            LANGGRAPH="${{ steps.pins.outputs.head_langgraph }}" \
+            CHECKPOINT_AWS="${{ steps.pins.outputs.head_checkpoint }}"
 
       - name: Destroy the canary stack
         if: always() && steps.pins.outputs.changed == 'true'
