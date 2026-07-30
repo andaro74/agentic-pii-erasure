@@ -1381,6 +1381,22 @@ Two smaller notes from the same read. `04-recovery-semantics.mermaid` is deliber
 
 **A correction worth recording, because I nearly reported the opposite.** Reproducing the failure in a scratch directory with no existing lockfile, `pip-compile` resolved everything fresh and moved 27 transitive pins (boto3, langchain-core, an `httpx-sse` → `httpx2` swap). I was about to warn that the canary churns the dependency set as a side effect. Re-running it the way `make lock` actually runs — over the **existing** `requirements.lock`, which pip-compile preserves where it can — moved exactly one line: `langgraph==1.2.9` → `1.2.10`. The reproduction was wrong, not the target, and the difference was an argument I had left out. *Reproduce the command, not an approximation of it.*
 
+### 2026-07-29 · M9 closed — what two deployed gates found that reading could not
+
+`make chaos` green (6 tests, seven of PROJECT-STRUCTURE.md's eight cases) and `bash scripts/upgrade_canary.sh 1.2.10 1.2.0` **passed on a real bump**: a saga paused on langgraph 1.2.9 resumed on 1.2.10, from the same DynamoDB table, with a byte-identical manifest digest. `langgraph-checkpoint-aws` was already at its newest release and is reported as *not canaried* rather than folded into the claim.
+
+Seven findings in the pass, and **the two gates produced six of them**. One was found by reading (V12-5, the diagram check), and even that surfaced only while clearing drift the gates had created work for.
+
+| Where it hid | Findings |
+|---|---|
+| A rule applied where it was written, not to the class it names | V12-2, V12-3, V12-6 |
+| A control whose mechanism did not exist, or could not run | V12-1, V12-5, V12-7 |
+| A message that was true in one case and read as true in all | V12-4, V12-7b |
+
+**Three of these were mine, from earlier in the same session.** ADR-027 was written three commits before V12-2 and V12-3 found its consequences; the `make check`-before-deploy step went into the canary one commit before it caught V12-6 in the script that added it. That is the argument for shipping mechanisms rather than intentions, and it is not a flattering one: I wrote the rule, then failed to ask which other code reads the state it produces — the question this file has now recorded six times.
+
+**The sharpest finding is the one about the gate itself.** ADR-016 names the upgrade canary as the *only* control that catches a saga stranded by a serialization change. It had never been run with arguments. It bumped two of the three places a pin lives, and the target it depended on — `make lock` — had been broken by an unrelated pip upgrade. A control that has never been exercised is a claim, and this repo's whole thesis is that claims and mechanisms are different things. **The canary now has a passing run behind it, which is the first time that sentence has been true.**
+
 1. Read a doc claim as an adversary: *what would make this false, and could the
    named control detect it?*
 2. If the control can't go red, that's a finding — record it here with the fix and

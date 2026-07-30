@@ -27,7 +27,7 @@ dependencies = [
   # ⚠️ The transitive layer is NOT yet covered: a lockfile (uv or pip-tools) is a
   # ROADMAP M0 deliverable and must be committed before invariant #9 is fully
   # backed — until then, only these two direct pins are protected.
-  "langgraph==1.2.9",
+  "langgraph==1.2.10",
   "langgraph-checkpoint-aws==1.2.0",       # DynamoDBSaver + S3 offload. ADR-016.
   "langchain>=1.0,<2",                     # the Bedrock model client (no agents: ADR-026)
   "langchain-aws>=1.0,<2",                 # ChatBedrockConverse

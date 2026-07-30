@@ -98,7 +98,7 @@ langchain-protocol==0.0.18
     # via
     #   langchain-core
     #   langgraph-sdk
-langgraph==1.2.9
+langgraph==1.2.10
     # via
     #   agentic-pii-erasure (pyproject.toml)
     #   langchain

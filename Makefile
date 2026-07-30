@@ -175,7 +175,7 @@ ASSETS := $(LAMBDA_ASSET) $(SAGA_ASSET) $(RUNTIME_ASSET)
 # a unit test compares these strings against the pyproject pins verbatim, so a bump
 # that touches only one of the two fails `make check` instead of deploying a Lambda
 # whose checkpoint serialization differs from the one the tests exercised.
-SAGA_PINS := "langgraph==1.2.9" "langgraph-checkpoint-aws==1.2.0"
+SAGA_PINS := "langgraph==1.2.10" "langgraph-checkpoint-aws==1.2.0"
 
 .PHONY: package
 package: ## Stage the deploy assets (participants + saga + discovery Runtime).

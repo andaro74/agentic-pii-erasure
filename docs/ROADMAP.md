@@ -279,7 +279,7 @@ There is no local mode ([ADR-017](adr/ADR-017-real-aws-participants.md)), so fro
 
 **Traps:** rubber-stamping converts the HITL control into theatre; the presenter is a control, not a UI nicety · the walkthrough must show the pause as *absence of compute*, because that is the property [ADR-016](adr/ADR-016-serverless-durability.md) is built on · compress the grace window via a stack parameter, never by bypassing the scheduler.
 
-## - [ ] M9 · Hardening: chaos + the upgrade canary
+## - [x] M9 · Hardening: chaos + the upgrade canary
 
 **Build:** the chaos suite from [PROJECT-STRUCTURE.md](PROJECT-STRUCTURE.md) (including Callum's resurrection at T+7 and a Scheduler double-fire → exactly one resume) · `tests/integration/test_upgrade_canary.py` implementing the `CANARY_STAGE=pause|resume` contract in `scripts/upgrade_canary.sh`'s header.
 
@@ -287,15 +287,27 @@ There is no local mode ([ADR-017](adr/ADR-017-real-aws-participants.md)), so fro
 
 **Deployed done when:** `make chaos` green · `bash scripts/upgrade_canary.sh` passes — pause a saga, bump the pinned `langgraph` **and `langgraph-checkpoint-aws`**, assert a clean resume from the same DynamoDB table.
 
-> **Carried in from M8's deployed gate (V11-8).** `seeds/meridian.json` says the
-> litigation hold is *"scoped to one table on purpose — the uploads and profile items are
-> still erased"*, while `saga/nodes/hold_check.py` blocks the whole saga on any hold and
-> says so deliberately (*"partial-scope erasure under a hold is a policy decision no
-> default should make"*). Both are defensible; they cannot both be the design, and the
-> fixture's `proves` field currently claims a property the platform demonstrates only
-> half of. **Decide it here, with an ADR**, alongside the hold-during-grace-window case —
-> that is the scenario where a scoped hold either does or does not stop phase 3 for the
-> participants it never named.
+> **Carried in from M8 (V11-8), and resolved here.** `seeds/meridian.json` and
+> `saga/nodes/hold_check.py` disagreed about whether a scoped hold stops the whole saga.
+> [ADR-027](adr/ADR-027-holds-block-a-scope-not-a-subject.md) decided it — a hold blocks
+> its scope, not the subject — and the rule moved to `contract/holds.py` so the
+> participants and the saga read it from one place. The fixture's `proves` field is now
+> true rather than half-true.
+>
+> **The deployed gate then found five more (V12-1 … V12-5).** Two were ADR-027's own
+> consequences reaching further than the commit that wrote it: a residual disclosed under
+> a hold was graded as a *failed erasure* by the node that runs immediately after phase 3
+> (V12-2), and `billing-ledger` deleted a row its retained rows reference `ON DELETE
+> RESTRICT`, which Aurora refused — **while the hermetic test asserted that exact
+> behaviour**, because the fake had no foreign keys (V12-3). A hold retains what its
+> scope cannot survive without.
+>
+> **And the canary itself had never run.** `bash scripts/upgrade_canary.sh 1.2.10 1.2.0`
+> failed twice before passing: it bumped two of the *three* places a pin lives (V12-6),
+> and `make lock` — the mechanism invariant 9 names — installed `pip-tools` unpinned and
+> was broken by a pip upgrade (V12-7). The control ADR-016 calls its only real defence
+> against a silently stranded saga was structurally incapable of passing. It passes now,
+> on a real bump.
 
 **Traps:** the canary is [ADR-016](adr/ADR-016-serverless-durability.md)'s only control that actually catches a stranded saga — the script is the contract; the test implements it exactly · the canary must cover both pins, because serialization lives in the checkpoint package as much as in `langgraph` (VALIDATION baseline finding #3, in its new clothes).
 
