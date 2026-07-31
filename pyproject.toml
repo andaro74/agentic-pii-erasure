@@ -69,8 +69,8 @@ cedar = ["cedarpy>=3.2"]
 erasure = "pii_erasure.cli.main:app"
 
 [project.urls]
-Homepage = "https://github.com/YOUR-ORG/agentic-pii-erasure"
-Architecture = "https://github.com/YOUR-ORG/agentic-pii-erasure/blob/main/docs/ARCHITECTURE.md"
+Homepage = "https://github.com/andaro74/agentic-pii-erasure"
+Architecture = "https://github.com/andaro74/agentic-pii-erasure/blob/main/docs/ARCHITECTURE.md"
 
 [tool.hatch.build.targets.wheel]
 # `evals` ships too: the CLI's `seed` imports the fixture generator, and a console

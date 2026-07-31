@@ -148,7 +148,7 @@ Adding participant #9 means writing one Lambda, registering one Gateway target, 
 Requires Python 3.10+, Node (for the CDK CLI), an AWS account, credentials the AWS CLI can use, and Bedrock model access enabled in your region.
 
 ```bash
-git clone https://github.com/YOUR-ORG/agentic-pii-erasure
+git clone https://github.com/andaro74/agentic-pii-erasure
 cd agentic-pii-erasure
 
 make install        # venv + dependencies + .env
