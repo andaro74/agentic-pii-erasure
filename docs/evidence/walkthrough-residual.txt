@@ -1,12 +1,12 @@
-\u2500\u2500 walkthrough saga_f7ff30c2f7f8 · subject sub_mar_7f3a91c4 \u2500\u2500
+\u2500\u2500 walkthrough saga_734d882118f9 · subject sub_nne_8d5b3f60 \u2500\u2500
 
 
 1. intake
 
 2. discovery + plan
-   [   0s] status=already_tombstoned gate=None
+   [   5s] status=already_tombstoned gate=None
 
-\u274c walkthrough FAILED: saga_f7ff30c2f7f8 halted at status 'already_tombstoned' 
+\u274c walkthrough FAILED: saga_734d882118f9 halted at status 'already_tombstoned' 
 while waiting for 'approval'. This subject has already been erased — intake 
 found a tombstone and halted before planning, which is the idempotency guard 
 working rather than a failure. The seeded subjects are one-shot: a walkthrough,

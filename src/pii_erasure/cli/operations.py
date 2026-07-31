@@ -358,10 +358,13 @@ _TERMINAL_EXPLANATIONS = {
     ),
     "already_tombstoned": (
         "This subject has already been erased — intake found a tombstone and halted "
-        "before planning, which is the idempotency guard working rather than a failure. "
-        "The seeded subjects are one-shot: a walkthrough, `make integration` or a "
-        "conformance run consumes the one it touches. Pick another subject, or re-run "
-        "`make seed` to restore the fabricated set."
+        "before planning, which is the anti-resurrection guard working rather than a "
+        "failure. The seeded subjects are one-shot: a walkthrough, `make integration` or "
+        "a conformance run consumes the one it touches. Pick a subject that has not been "
+        "erased. **Re-seeding does NOT help** — the subjectRefs are fixed in "
+        "seeds/meridian.json and the tombstone registry is append-only by design "
+        "(§5.3), so `make seed` rewrites the same refs and intake refuses them again. "
+        "The only reset is `make destroy-dev && make deploy-dev && make seed`."
     ),
 }
 

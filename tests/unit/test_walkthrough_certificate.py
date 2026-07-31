@@ -255,3 +255,87 @@ def test_only_held_subjects_left_says_to_reseed(
     monkeypatch.setattr(walkthrough, "_tombstoned", lambda refs: set())
     with pytest.raises(OperationError, match="legal hold"):
         walkthrough.seeded_subject()
+
+
+# ─── --subject is validated before a saga exists (V13-14) ─────────────────────────────
+
+
+def _fixture(tmp_path: Path) -> Path:
+    truth = tmp_path / "ground-truth.json"
+    truth.write_text(
+        json.dumps(
+            {
+                "subjects": {
+                    "sub_gone": {"profile-store": {}},
+                    "sub_held": {"profile-store": {}, "upload-bucket": {}},
+                    "sub_ok": {"profile-store": {}, "vector-index": {}},
+                },
+                "holds": {"sub_held": ["hold-1"]},
+            }
+        ),
+        encoding="utf-8",
+    )
+    return truth
+
+
+def test_an_erased_subject_is_refused_before_intake(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`--subject` bypassed every check `seeded_subject` makes, so naming an erased
+    subject created a saga, drove it to `already_tombstoned`, and reported the halt as a
+    walkthrough failure. The saga was right; the run should not have started."""
+    monkeypatch.setattr(walkthrough, "GROUND_TRUTH", _fixture(tmp_path))
+    monkeypatch.setattr(walkthrough, "_tombstoned", lambda refs: {"sub_gone"})
+    with pytest.raises(OperationError) as raised:
+        walkthrough.check_usable("sub_gone")
+    assert "sub_ok" in str(raised.value), "the refusal must name what IS usable"
+
+
+def test_the_refusal_does_not_advise_reseeding(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The heart of V13-14. `make seed` cannot undo a tombstone: the subjectRefs are fixed
+    in seeds/meridian.json and the registry is append-only by design, so re-seeding
+    rewrites the same refs and intake refuses them again. Two messages advised it anyway —
+    and advice that sends an operator to a command which appears to succeed and changes
+    nothing is worse than no advice."""
+    monkeypatch.setattr(walkthrough, "GROUND_TRUTH", _fixture(tmp_path))
+    monkeypatch.setattr(walkthrough, "_tombstoned", lambda refs: {"sub_gone"})
+    with pytest.raises(OperationError) as raised:
+        walkthrough.check_usable("sub_gone")
+    assert "make seed" not in str(raised.value).replace("make destroy-dev", "")
+
+
+def test_the_exhausted_message_names_the_only_real_reset() -> None:
+    """When nothing remains, the only honest remedy is a new stack."""
+    assert "destroy-dev" in walkthrough._EXHAUSTED
+    assert "append-only" in walkthrough._EXHAUSTED
+
+
+def test_a_held_subject_is_refused_as_the_wrong_demonstration(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A hold stops the saga at `hold_check` — the veto working, and worth showing, but a
+    different demonstration from the arc this command measures."""
+    monkeypatch.setattr(walkthrough, "GROUND_TRUTH", _fixture(tmp_path))
+    monkeypatch.setattr(walkthrough, "_tombstoned", lambda refs: set())
+    with pytest.raises(OperationError, match="BLOCKED_BY_HOLD"):
+        walkthrough.check_usable("sub_held")
+
+
+def test_a_subject_the_map_never_heard_of_is_left_alone(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`--subject` stays an escape hatch. This check overrules the operator only where the
+    fixtures KNOW the run cannot work — erased, or held. Refusing on mere absence would
+    turn a debugging flag into a whitelist keyed on a gitignored build artefact, and
+    `test_an_explicit_subject_is_honoured` is the contract that says not to."""
+    monkeypatch.setattr(walkthrough, "GROUND_TRUTH", _fixture(tmp_path))
+    walkthrough.check_usable("sub_invented")
+
+
+def test_a_usable_subject_passes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The counter-case, so the check is a check and not a blanket refusal."""
+    monkeypatch.setattr(walkthrough, "GROUND_TRUTH", _fixture(tmp_path))
+    monkeypatch.setattr(walkthrough, "_tombstoned", lambda refs: {"sub_gone"})
+    walkthrough.check_usable("sub_ok")

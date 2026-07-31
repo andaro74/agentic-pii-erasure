@@ -56,6 +56,29 @@ _STEPS = (
 #: demonstrating a lookup that finds nothing.
 GROUND_TRUTH = Path("evals/fixtures/ground-truth.json")
 
+#: What to do when every seeded subject has been erased — and specifically what NOT to do.
+#:
+#: This message used to say "run `make seed` for a fresh set", which cannot work and was
+#: repeated into the CLI's tombstone explanation before anyone tried it (V13-14). The
+#: seven `subjectRef` values are **hardcoded in `seeds/meridian.json`**, and the tombstone
+#: registry is keyed by their hash and is append-only by design — §5.3's anti-resurrection
+#: control, whose whole point is that an entry outlives the data permanently. So re-seeding
+#: rewrites the same seven refs, every one of them still tombstoned, and `intake` refuses
+#: exactly as before. The command succeeds; the problem does not move.
+#:
+#: Deleting rows from the tombstone table would "work" and is left out on purpose: it
+#: disables the control this platform exists to demonstrate, and an operator who learns
+#: that habit on a dev stack has learned the wrong one.
+_EXHAUSTED = (
+    "every seeded subject has already been erased, and re-seeding will NOT help: the "
+    "subjectRefs are fixed in seeds/meridian.json and the tombstone registry is "
+    "append-only by design (ARCHITECTURE §5.3 — an erased subject can never be "
+    "recreated). The only reset is a new stack:\n\n"
+    "  make destroy-dev && make deploy-dev && make seed\n\n"
+    "Run the walkthrough BEFORE `make conformance` and `make integration` next time — "
+    "those consume subjects too, and they are what ate this set."
+)
+
 
 def seeded_subject() -> str:
     """A subject the fixtures actually placed data for.
@@ -101,11 +124,7 @@ def seeded_subject() -> str:
     erased = _tombstoned(placed)
     remaining = {ref: systems for ref, systems in placed.items() if ref not in erased}
     if not remaining:
-        raise OperationError(
-            f"every seeded subject in {GROUND_TRUTH} has already been erased. Run "
-            f"`make seed` for a fresh set — re-running against a tombstoned subject "
-            f"tests the resurrection guard, not the walkthrough."
-        )
+        raise OperationError(_EXHAUSTED)
     # Of those, the one touching the MOST systems: a walkthrough that exercises one
     # participant proves less than one that exercises seven, and phase 3's
     # per-participant loop is where ordering and residual honesty actually show up.
@@ -128,8 +147,57 @@ def _tombstoned(subject_refs: Iterable[str]) -> set[str]:
     return {ref for ref in subject_refs if registry.is_tombstoned(ref)}
 
 
+def check_usable(subject_ref: str) -> None:
+    """Refuse a named subject the fixtures already say cannot complete the arc.
+
+    `--subject` bypassed every check `seeded_subject()` makes. Naming an erased subject
+    therefore created a saga, drove it to `already_tombstoned`, and reported the halt as a
+    walkthrough failure (V13-14) — the saga was right, and the run should never have
+    started. Checked here, before intake, so the answer costs one DynamoDB read instead of
+    a saga and a poll.
+    """
+    if not GROUND_TRUTH.is_file():
+        return  # seeded_subject()'s own error covers a missing map better than this can
+    truth = json.loads(GROUND_TRUTH.read_text(encoding="utf-8"))
+    subjects = truth.get("subjects", {})
+    if subject_ref not in subjects:
+        # Deliberately NOT refused. `--subject` is a debugging escape hatch, and an
+        # operator chasing a subject this local map has never heard of — one from another
+        # seed run, or from a real saga — is not doing anything wrong. Refusing on absence
+        # would turn the escape hatch into a whitelist keyed on a build artefact. This
+        # function only overrules the operator where the fixtures KNOW the run cannot
+        # work; it does not gatekeep what it has no opinion about.
+        return
+
+    held = {ref for ref, ids in (truth.get("holds") or {}).items() if ids}
+    placed = {ref for ref, systems in subjects.items() if systems and ref not in held}
+    erased = _tombstoned(list(subjects))
+    usable = sorted(placed - erased)
+
+    if subject_ref in erased:
+        raise OperationError(
+            f"{subject_ref} has already been erased — its tombstone is permanent, so this "
+            f"run would halt at intake without demonstrating anything.\n"
+            + (
+                f"Still usable: {', '.join(usable)}"
+                if usable
+                else "No seeded subject remains.\n\n" + _EXHAUSTED
+            )
+        )
+    if subject_ref in held:
+        raise OperationError(
+            f"{subject_ref} is under a legal hold, so it stops at `hold_check` before "
+            f"phase 2 and writes BLOCKED_BY_HOLD. That is the veto working and worth "
+            f"demonstrating — but it is a different demonstration from the arc, and this "
+            f"command measures the arc.\n"
+            f"For the arc: {', '.join(usable) or '(none remain)'}"
+        )
+
+
 def run(*, subject: str | None = None, tenant: str = "default") -> int:
     try:
+        if subject:
+            check_usable(subject)
         subject_ref = subject or seeded_subject()
     except OperationError as error:
         _console.print(f"\n❌ walkthrough FAILED: {error}")
