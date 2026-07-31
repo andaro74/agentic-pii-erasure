@@ -1,0 +1,25 @@
+\u2500\u2500 walkthrough saga_08c1cc67f859 · subject sub_tob_5a0f8b31 \u2500\u2500
+
+
+1. intake
+
+2. discovery + plan
+   [   4s] status=unknown gate=None
+   [  14s] status=running gate=None
+   [  68s] status=running gate=None
+   [ 121s] status=running gate=None
+   [ 185s] status=running gate=None
+   [ 249s] status=running gate=None
+   [ 302s] status=running gate=None
+   [ 366s] status=running gate=None
+   [ 420s] status=running gate=None
+   [ 485s] status=running gate=None
+   [ 604s] status=running gate=None
+   [ 669s] status=running gate=None
+   [ 723s] status=running gate=None
+   [ 783s] status=running gate=None
+   [ 848s] status=running gate=None
+
+\u274c walkthrough FAILED: saga_08c1cc67f859 did not reach 'approval' within 900s 
+(last: gate=None status='running')
+make: *** [Makefile:392: walkthrough] Error 1

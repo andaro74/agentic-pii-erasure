@@ -27,6 +27,13 @@ are not, and nothing here should ever contain one.
 | `tools-list.json` | the `tools/list` response | §4.2 — the tool was never offered |
 | `verify-residuals.txt` | `make integration` / the certificate | §4.3 — PARTIAL, disclosed |
 | `cost.md` | Cost Explorer: one run, and 24h idle | §5 |
+| `walkthrough-crypto-shred.txt` | `make walkthrough`, against the stack **before** V13-15 | VALIDATION V13-15 — the failure that found the bug |
+
+**A failing transcript belongs here when an entry in the pass log cites it.** The rest of
+this table is runs that worked, and a reader who finds a timeout with no framing concludes
+the platform is broken rather than that a defect was caught and recorded. So a failure
+capture carries the entry it belongs to, in the row above — and the passing re-run lands
+beside it rather than replacing it, for the same reason the superseded ADRs are kept.
 
 §4.2 needs **both** files. The deny line proves the request was refused; the tool list
 proves the tool was never in the model's choices to begin with. Those are different

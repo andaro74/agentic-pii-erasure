@@ -18,6 +18,7 @@ from typing import Any
 
 import pytest
 
+from pii_erasure.contract.archetypes import DEK_ARTIFACT_KIND
 from pii_erasure.contract.registry import system_ids
 from pii_erasure.contract.tools import MUTATING_TOOLS, READ_ONLY_TOOLS
 from pii_erasure.discovery import (
@@ -182,13 +183,25 @@ def test_artifacts_present_beat_a_found_false() -> None:
 # ─── 3. the editor cannot subtract — the adversarial defence ─────────────────────────
 
 
+#: What `compliance-archive` — the one WORM participant — actually returns from
+#: `discover`: the locked ciphertext, and the wrapped DEK that is the only destroyable
+#: thing about it. The fixture used to hand back a generic `row` for every system, so
+#: `reconcile` had no locator to build `dekRegistryRef` from and the WORM test asserted a
+#: `CRYPTO_SHRED` the planner could not actually produce (V13-15). A fake that cannot fail
+#: the way the service fails is not testing the caller, it is agreeing with it.
+_WORM_ARTIFACTS = (
+    {"kind": "locked-object", "locator": "compliance-archive:1"},
+    {"kind": DEK_ARTIFACT_KIND, "locator": "dek-registry#sub_a3f9"},
+)
+
+
 def _found(system_id: str, **extra: Any) -> ProbeResult:
-    return ProbeResult(
-        system_id=system_id,
-        found=True,
-        artifacts=({"kind": "row", "locator": f"{system_id}:1"},),
-        **extra,
+    artifacts = (
+        _WORM_ARTIFACTS
+        if system_id == "compliance-archive"
+        else ({"kind": "row", "locator": f"{system_id}:1"},)
     )
+    return ProbeResult(system_id=system_id, found=True, artifacts=artifacts, **extra)
 
 
 def test_a_model_annotation_cannot_remove_a_discovered_participant() -> None:
@@ -243,6 +256,46 @@ def test_the_worm_shred_sorts_last_and_derived_stores_first() -> None:
     assert order[0] == "vector-index"
     assert order[-1] == "compliance-archive"
     assert entries[-1]["deleteMethod"] == "CRYPTO_SHRED"
+
+
+def test_a_shred_carries_the_dek_the_participant_reported() -> None:
+    """`CRYPTO_SHRED` without a `dekRegistryRef` is refused by `ManifestParticipant`, so
+    setting the method from the archetype alone made **every** WORM plan fail manifest
+    validation — the participant list came back empty and the saga died in `plan` and
+    retried until the walkthrough timed out (V13-15).
+
+    The ref must be the locator the participant itself returned. Re-deriving it here
+    would be the side mapping ADR-021 warns against: a second address for the key that
+    can drift from the key it addresses.
+    """
+    entry = reconcile([_found("compliance-archive")])[0]
+    assert entry["deleteMethod"] == "CRYPTO_SHRED"
+    assert entry["dekRegistryRef"] == "dek-registry#sub_a3f9"
+
+
+def test_worm_with_no_wrapped_dek_claims_no_deletion_method_at_all() -> None:
+    """Ciphertext under Object Lock with no key to destroy. `PURGE` would be a lie —
+    COMPLIANCE mode refuses deletion to everyone including root — and `CRYPTO_SHRED`
+    would name a target that does not exist. Saying nothing is the only honest answer,
+    and it lets the residual machinery disclose it (invariant 7).
+
+    Asserted rather than assumed because this branch is the one a later 'simplification'
+    collapses back into `CRYPTO_SHRED if WORM`, which is the bug above.
+    """
+    keyless = ProbeResult(
+        system_id="compliance-archive",
+        found=True,
+        artifacts=({"kind": "locked-object", "locator": "compliance-archive:1"},),
+    )
+    entry = reconcile([keyless])[0]
+    assert "deleteMethod" not in entry
+    assert "dekRegistryRef" not in entry
+
+
+def test_a_non_worm_system_purges_and_names_no_key() -> None:
+    entry = reconcile([_found("profile-store")])[0]
+    assert entry["deleteMethod"] == "PURGE"
+    assert "dekRegistryRef" not in entry
 
 
 # ─── 4. holds arrive through the structural channel only ─────────────────────────────

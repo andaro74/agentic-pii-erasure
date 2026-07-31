@@ -33,6 +33,7 @@ import boto3
 from botocore.exceptions import ClientError
 
 from pii_erasure.contract import (
+    DEK_ARTIFACT_KIND,
     Archetype,
     Artifact,
     DiscoverRequest,
@@ -61,7 +62,9 @@ CIPHERTEXT_KIND = "locked-object"
 
 #: The wrapped data key. The only thing here that *can* be destroyed, which is why it is
 #: the whole erasure mechanism.
-DEK_KIND = "wrapped-dek"
+#: The planner matches on exactly this kind to fill the manifest's `dekRegistryRef`,
+#: so the string lives in `contract/` and both layers read it from there (V13-15).
+DEK_KIND = DEK_ARTIFACT_KIND
 
 READABLE = "READABLE"
 SHREDDED = "SHREDDED"

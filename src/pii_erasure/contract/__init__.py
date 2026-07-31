@@ -6,7 +6,7 @@ wholesale, and it is what made two framework migrations and one cloud-native rew
 cheap enough to do on the record.
 """
 
-from pii_erasure.contract.archetypes import Archetype
+from pii_erasure.contract.archetypes import DEK_ARTIFACT_KIND, Archetype
 from pii_erasure.contract.canonical import (
     SCHEMA_VERSION,
     CanonicalisationError,
@@ -44,6 +44,7 @@ from pii_erasure.contract.verbs import (
 )
 
 __all__ = [
+    "DEK_ARTIFACT_KIND",
     "MUTATING_VERBS",
     "PARTICIPANTS",
     "READ_ONLY_VERBS",

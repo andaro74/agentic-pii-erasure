@@ -33,7 +33,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from pii_erasure.contract.archetypes import Archetype
+from pii_erasure.contract.archetypes import DEK_ARTIFACT_KIND, Archetype
 from pii_erasure.contract.registry import PARTICIPANTS
 from pii_erasure.discovery.agents.counsel import HoldFinding
 from pii_erasure.discovery.agents.prospector import ProbeResult
@@ -112,12 +112,51 @@ def reconcile(
             "holds": [held[result.system_id].as_contract()] if result.system_id in held else [],
             "plannedOps": ["soft_delete", "hard_delete"],
             "order": {"phase": 3, "rank": rank},
-            "deleteMethod": "CRYPTO_SHRED" if archetype is Archetype.WORM else "PURGE",
         }
+        entry.update(_deletion_method(archetype, entry["artifacts"]))
         entries.append(_annotate(entry, (annotations or {}).get(result.system_id)))
 
     entries.sort(key=lambda entry: (entry["order"]["rank"], entry["systemId"]))
     return tuple(entries)
+
+
+def _deletion_method(
+    archetype: Archetype, artifacts: Sequence[Mapping[str, Any]]
+) -> dict[str, Any]:
+    """How this system's data dies — and, for a shred, *what* gets shredded.
+
+    `CRYPTO_SHRED` without a `dekRegistryRef` is refused by `ManifestParticipant`, because
+    a shred that names no target is not a deletion plan. This function used to set the
+    method from the archetype alone and never the ref, so **every** WORM plan failed
+    manifest validation, the participant list came back empty, and the saga died in
+    `plan` and retried until the walkthrough timed out (V13-15). Nothing caught it because
+    `compliance-archive` is the only WORM participant and one fixture subject reaches it.
+
+    The ref is read from the participant's own `discover` output rather than derived here.
+    The locator it returns is the authoritative one, and re-deriving `table#subject` in a
+    second place would be the side mapping ADR-021 warns against — a value that can drift
+    from the thing it addresses.
+
+    **WORM with no wrapped DEK gets no method at all.** That is ciphertext under Object
+    Lock with no key to destroy: `PURGE` would be a lie (COMPLIANCE mode refuses deletion
+    to everyone including root) and `CRYPTO_SHRED` would name a target that does not
+    exist. Leaving it unset says the true thing — nothing here can be deleted — and lets
+    the deletability and residual machinery disclose it, which is invariant 7's whole
+    posture.
+    """
+    if archetype is not Archetype.WORM:
+        return {"deleteMethod": "PURGE"}
+    dek = next(
+        (
+            str(artifact["locator"])
+            for artifact in artifacts
+            if artifact.get("kind") == DEK_ARTIFACT_KIND and artifact.get("locator")
+        ),
+        None,
+    )
+    if dek is None:
+        return {}
+    return {"deleteMethod": "CRYPTO_SHRED", "dekRegistryRef": dek}
 
 
 #: The only keys a model annotation may contribute. Everything else is ignored —

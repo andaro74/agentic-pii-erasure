@@ -43,3 +43,15 @@ class Archetype(str, Enum):
     #: SES. Some residual is legally required — the suppression entry stays. Disclose
     #: it, never hide it (invariant 7).
     RESIDUAL_BY_DESIGN = "RESIDUAL_BY_DESIGN"
+
+
+#: The artifact kind a WORM participant uses to report its per-subject wrapped DEK.
+#:
+#: In `contract/` rather than beside the participant because two layers must agree on it
+#: and neither owns it: `participants/compliance_archive` emits it in `discover`, and the
+#: planner reads it to fill `dekRegistryRef` on the manifest. When only the participant
+#: named it, the planner could not — so every WORM plan set `deleteMethod: CRYPTO_SHRED`
+#: with no shred target and failed manifest validation, taking the whole saga with it
+#: (V13-15). A vocabulary shared by two layers and defined in one of them is a coupling
+#: nobody can see.
+DEK_ARTIFACT_KIND = "wrapped-dek"
