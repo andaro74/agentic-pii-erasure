@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1080" viewBox="0 0 1920 1080">
+  <defs>
+    <linearGradient id="gc" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0A1D28"/><stop offset="55%" stop-color="#0E2634"/><stop offset="100%" stop-color="#143140"/>
+    </linearGradient>
+    <linearGradient id="cardc" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0F2A37"/><stop offset="100%" stop-color="#0C222D"/>
+    </linearGradient>
+    <clipPath id="clipc"><rect x="0" y="0" width="1920" height="1080"/></clipPath>
+  </defs>
+
+  <rect width="1920" height="1080" fill="url(#gc)"/>
+
+  <g clip-path="url(#clipc)" font-family="IBM Plex Mono" font-size="52" fill="#3E7A90" opacity="0.065" letter-spacing="3">
+    <text x="-40" y="110">3f9ac1d04b7e2288af10cc73915d6b0e4a2f88d1c05be7a3</text>
+    <text x="-190" y="230">b7e2288af10cc73915d6b0e4a2f88d1c05be7a33f9ac1d04</text>
+    <text x="-90" y="350">15d6b0e4a2f88d1c05be7a33f9ac1d04b7e2288af10cc739</text>
+    <text x="-240" y="470">c05be7a33f9ac1d04b7e2288af10cc73915d6b0e4a2f88d1</text>
+    <text x="-60" y="590">af10cc73915d6b0e4a2f88d1c05be7a33f9ac1d04b7e2288</text>
+    <text x="-210" y="710">4a2f88d1c05be7a33f9ac1d04b7e2288af10cc73915d6b0e</text>
+    <text x="-100" y="830">33f9ac1d04b7e2288af10cc73915d6b0e4a2f88d1c05be7a</text>
+    <text x="-230" y="950">915d6b0e4a2f88d1c05be7a33f9ac1d04b7e2288af10cc73</text>
+    <text x="-70" y="1070">d1c05be7a33f9ac1d04b7e2288af10cc73915d6b0e4a2f88</text>
+  </g>
+
+  <rect x="0" y="0" width="1920" height="8" fill="#D9A441"/>
+
+  <!-- eyebrow -->
+  <text x="120" y="168" font-family="IBM Plex Mono" font-size="23" font-weight="500" fill="#7FA6B5" letter-spacing="3.6">GDPR ART. 17 &#183; THE RIGHT TO ERASURE</text>
+
+  <!-- headline -->
+  <g font-family="IBM Plex Sans Condensed" font-weight="700" font-size="132" fill="#EDE7D8">
+    <text x="114" y="318">AGENTIC</text>
+    <text x="114" y="444">PII ERASURE</text>
+  </g>
+
+  <rect x="120" y="496" width="128" height="5" fill="#D9A441"/>
+
+  <!-- purpose -->
+  <g font-family="IBM Plex Mono" font-size="27" fill="#B9CBD4">
+    <text x="120" y="566">Automated, auditable deletion of a</text>
+    <text x="120" y="608">data subject across eight AWS systems.</text>
+  </g>
+
+  <!-- built with -->
+  <rect x="120" y="682" width="850" height="2" fill="#25505F"/>
+  <text x="120" y="730" font-family="IBM Plex Mono" font-size="20" font-weight="500" fill="#5E8798" letter-spacing="3.6">BUILT WITH</text>
+  <text x="120" y="792" font-family="IBM Plex Sans Condensed" font-weight="600" font-size="47" fill="#EDE7D8">LangGraph &#183; AWS &#183; Claude Code</text>
+  <text x="120" y="840" font-family="IBM Plex Mono" font-size="22" fill="#6E97A8">LangChain &#183; Amazon Bedrock AgentCore &#183; MCP &#183; Cedar &#183; DynamoDB</text>
+
+  <!-- production-grade badge -->
+  <rect x="120" y="898" width="620" height="58" rx="3" fill="#1B2E2A" stroke="#5E9E8E" stroke-width="1.5"/>
+  <text x="430" y="935" text-anchor="middle" font-family="IBM Plex Mono" font-size="20" font-weight="600" fill="#5E9E8E" letter-spacing="2.4">PRODUCTION-GRADE &#183; REAL AWS ACCOUNT</text>
+
+  <!-- ============ pipeline card ============ -->
+  <g>
+    <rect x="1110" y="190" width="690" height="700" rx="4" fill="url(#cardc)" stroke="#265063" stroke-width="2"/>
+    <rect x="1110" y="190" width="690" height="5" fill="#5E9E8E"/>
+
+    <text x="1156" y="262" font-family="IBM Plex Mono" font-size="23" font-weight="600" fill="#EDE7D8" letter-spacing="3">ERASURE PIPELINE</text>
+    <rect x="1156" y="296" width="598" height="2" fill="#25505F"/>
+
+    <text x="1156" y="368" font-family="IBM Plex Mono" font-size="24" fill="#5E9E8E">1</text>
+    <text x="1210" y="368" font-family="IBM Plex Sans Condensed" font-weight="600" font-size="37" fill="#EDE7D8">DISCOVER</text>
+    <text x="1210" y="404" font-family="IBM Plex Mono" font-size="21" fill="#7FA6B5">agent reads, then proposes a manifest</text>
+
+    <text x="1156" y="480" font-family="IBM Plex Mono" font-size="24" fill="#5E9E8E">2</text>
+    <text x="1210" y="480" font-family="IBM Plex Sans Condensed" font-weight="600" font-size="37" fill="#EDE7D8">SOFT DELETE</text>
+    <text x="1210" y="516" font-family="IBM Plex Mono" font-size="21" fill="#7FA6B5">reversible &#8212; disable, tombstone</text>
+
+    <rect x="1156" y="562" width="598" height="58" rx="3" fill="#1B2E2A" stroke="#D9A441" stroke-width="1.5" stroke-dasharray="6 6"/>
+    <text x="1455" y="599" text-anchor="middle" font-family="IBM Plex Mono" font-size="21" font-weight="600" fill="#D9A441" letter-spacing="2.4">HUMAN APPROVAL GATE</text>
+
+    <text x="1156" y="694" font-family="IBM Plex Mono" font-size="24" fill="#5E9E8E">3</text>
+    <text x="1210" y="694" font-family="IBM Plex Sans Condensed" font-weight="600" font-size="37" fill="#EDE7D8">HARD DELETE</text>
+    <text x="1210" y="730" font-family="IBM Plex Mono" font-size="21" fill="#7FA6B5">forward only &#8212; purge, crypto-shred</text>
+
+    <rect x="1156" y="776" width="598" height="2" fill="#25505F"/>
+    <text x="1156" y="826" font-family="IBM Plex Mono" font-size="22" fill="#D9A441">The agent proposes. The saga disposes.</text>
+  </g>
+
+  <!-- repo url -->
+  <text x="1800" y="1032" text-anchor="end" font-family="IBM Plex Mono" font-size="21" fill="#5E8798">github.com/andaro74/agentic-pii-erasure</text>
+
+  <rect x="0" y="1072" width="1920" height="8" fill="#1B4152"/>
+</svg>

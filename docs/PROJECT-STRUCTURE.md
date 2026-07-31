@@ -20,7 +20,8 @@ agentic-pii-erasure/
 ├── .github/workflows/ci.yml   hermetic gates · ephemeral eval stack · upgrade canary
 ├── .claude/                   Claude Code settings + /next-milestone /add-participant /validate
 ├── docs/ROADMAP.md            the build order — milestones with executable "done when" gates
-├── docs/                      architecture, ADRs, diagrams
+├── docs/                      architecture, ADRs, diagrams, deployed-run evidence
+├── docs/article/              the LinkedIn write-up and its images — prose, not spec
 ├── infra/                     ⚠️ CDK — the deployment IS the product. Not optional.
 ├── src/pii_erasure/           the platform
 ├── seeds/                     made-up subject data, written into real AWS services
